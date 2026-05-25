@@ -1,0 +1,257 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_Teams.html  |  Team Performance page
+//
+//  CHANGES:
+//    1. Team Leader added as a valid role option in the modal dropdown
+//    2. Mobile Number field added to add/edit modal
+//    3. saveTeamMember() passes mobile to backend
+//    4. renderTeamCard() displays mobile number when present
+//    5. roleBadge updated to handle Team Leader visually
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _teamPeriodFilter  = 0;
+var _allPerfData       = [];   // full server response, used by member filter
+
+function loadTeamPerformance(periodMonths) {
+  if (periodMonths !== undefined) _teamPeriodFilter = periodMonths;
+  var container = document.getElementById('teamPerfContainer');
+  if (container) container.innerHTML = skeletonCards(4);
+
+  document.querySelectorAll('.period-btn').forEach(function(btn) {
+    var p = parseInt(btn.getAttribute('data-period') || '0', 10);
+    btn.classList.toggle('active', p === _teamPeriodFilter);
+  });
+
+  var args = _teamPeriodFilter > 0 ? [_teamPeriodFilter] : [];
+  runServer('getTeamPerformance', args).then(function(perf) {
+    renderTeamPerformance(perf);
+  }).catch(function(e) {
+    if (container) container.innerHTML = emptyState('fa-circle-exclamation','Error loading team data','Please refresh');
+    toast('Error loading team data', 'error');
+  });
+}
+
+function renderTeamPerformance(perf) {
+  // Show "Add Member" button only to Admins
+  var addBtn = document.getElementById('addMemberBtn');
+  if (addBtn) addBtn.style.display = (currentUser.role === 'Admin') ? '' : 'none';
+
+  var kpiRow    = document.getElementById('teamKpiRow');
+  var container = document.getElementById('teamPerfContainer');
+
+  if (!perf || perf.length === 0) {
+    if (kpiRow)    kpiRow.innerHTML    = '';
+    if (container) container.innerHTML = emptyState('fa-users','No team members yet','Add team members to see performance');
+    return;
+  }
+
+  var total    = perf.length;
+  var available = 0, busy = 0, overdue = 0, rateSum = 0;
+  for (var i = 0; i < perf.length; i++) {
+    if (perf[i].workloadStatus === 'available') available++;
+    if (perf[i].workloadStatus === 'busy')      busy++;
+    overdue  += perf[i].overdueTasks   || 0;
+    rateSum  += perf[i].completionRate || 0;
+  }
+  var avgRate = perf.length > 0 ? Math.round(rateSum / perf.length) : 0;
+
+  if (kpiRow) {
+    kpiRow.innerHTML = [
+      kpiCard('fa-users',             total,     'Team Size',         'kpi-blue'),
+      kpiCard('fa-circle-check',      available, 'Available',         'kpi-green'),
+      kpiCard('fa-fire',              busy,      'Overloaded',        'kpi-red'),
+      kpiCard('fa-chart-line',        avgRate+'%','Avg Completion',   'kpi-amber'),
+      kpiCard('fa-triangle-exclamation', overdue,'Total Overdue',     'kpi-red', 'border-left:4px solid var(--red)')
+    ].join('');
+  }
+
+  // Store full data and (re)init the employee filter multi-select
+  _allPerfData = perf;
+
+  // Populate allTeams so openTeamModal() can pre-fill fields when the Teams page
+  // is visited directly (without going through Projects first, which normally sets allTeams).
+  // getTeamPerformance() returns id, name, role, email, mobile — exactly what's needed.
+  allTeams = perf.map(function(m) {
+    return { id: m.id, name: m.name, role: m.role, email: m.email || '', mobile: m.mobile || '' };
+  });
+  var memberNames   = perf.map(function(m) { return m.name; });
+  var existing      = getMultiSelectValues('ms-teamMemberFilter');
+  var validExisting = existing.filter(function(n) { return memberNames.indexOf(n) !== -1; });
+  initMultiSelect('ms-teamMemberFilter', memberNames, validExisting, { placeholder: 'Filter employees...' });
+  _msOnChange('ms-teamMemberFilter', _applyTeamMemberFilter_);
+
+  if (container) {
+    var cards = [];
+    for (var i = 0; i < perf.length; i++) cards.push(renderTeamCard(perf[i]));
+    container.innerHTML = cards.join('');
+  }
+}
+
+// Re-renders only the cards matching the employee filter selection.
+// No selection = show all employees.
+function _applyTeamMemberFilter_() {
+  var container = document.getElementById('teamPerfContainer');
+  if (!container || !_allPerfData.length) return;
+  var selected = getMultiSelectValues('ms-teamMemberFilter');
+  var list = selected.length
+    ? _allPerfData.filter(function(m) { return selected.indexOf(m.name) !== -1; })
+    : _allPerfData;
+  var cards = [];
+  for (var i = 0; i < list.length; i++) cards.push(renderTeamCard(list[i]));
+  container.innerHTML = cards.length
+    ? cards.join('')
+    : emptyState('fa-users', 'No match', 'No employees match the current filter');
+}
+
+function kpiCard(icon, val, lbl, cls, extraStyle) {
+  return '<div class="kpi-card ' + cls + '" ' + (extraStyle?'style="'+extraStyle+'"':'') + '>' +
+    '<div class="kpi-icon-wrap"><i class="fas ' + icon + '"></i></div>' +
+    '<div class="kpi-body"><div class="kpi-value">' + val + '</div><div class="kpi-label">' + lbl + '</div></div>' +
+    '<div class="kpi-bg-icon"><i class="fas ' + icon + '"></i></div></div>';
+}
+
+function renderTeamCard(m) {
+  var rateColor = m.completionRate >= 80 ? 'var(--green)' : m.completionRate >= 50 ? 'var(--amber)' : 'var(--red)';
+  var progCls   = m.completionRate >= 80 ? 'prog-green' : m.completionRate >= 50 ? 'prog-amber' : 'prog-red';
+  var initials  = (m.name||'?').split(' ').map(function(n){ return n[0]||''; }).join('').toUpperCase().slice(0,2);
+  var isAdmin      = currentUser.role === 'Admin';
+  var isTeamLeader = currentUser.role === 'Team Leader';
+  var wl        = m.workloadStatus || 'available';
+  var wlIcon    = wl === 'busy' ? 'fa-fire' : wl === 'moderate' ? 'fa-bolt' : 'fa-leaf';
+  var mid       = escape(m.id);
+
+  var parts = [
+    '<div class="team-card ' + wl + '">',
+
+    // Head
+    '<div class="team-card-head">',
+    '<div style="display:flex;align-items:flex-start;gap:12px">',
+    '<div style="width:44px;height:44px;border-radius:var(--r-sm);background:linear-gradient(135deg,var(--blue),var(--blue-light));display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;color:#fff;flex-shrink:0">' + initials + '</div>',
+    '<div>',
+    '<div class="tc-name">' + escape(m.name) + '</div>',
+    '<div class="tc-role">' + roleBadge(m.role) + '</div>',
+    m.email  ? '<div class="tc-email"><i class="fas fa-envelope"></i>' + escape(m.email) + '</div>' : '',
+    m.mobile ? '<div class="tc-email" style="margin-top:2px"><i class="fas fa-mobile-screen-button" style="color:var(--green)"></i>' + escape(m.mobile) + '</div>' : '',
+    '</div></div>',
+    '<span class="workload-chip ' + wl + '"><i class="fas ' + wlIcon + '"></i>' + wl.charAt(0).toUpperCase() + wl.slice(1) + '</span>',
+    '</div>',
+
+    // Stats
+    '<div class="team-stats">',
+    teamStat(m.totalTasks,      'Total',   'var(--text-1)'),
+    teamStat(m.approvedTasks,   'Done',    'var(--green)'),
+    teamStat(m.pendingTasks,    'Pending', 'var(--amber)'),
+    teamStat(m.overdueTasks,    'Overdue', m.overdueTasks > 0 ? 'var(--red)' : 'var(--text-3)'),
+    '</div>',
+
+    '<div style="display:flex;border-bottom:1px solid var(--border)">',
+    teamStat(m.inProgressTasks, 'In Progress',    'var(--blue)'),
+    teamStat(m.pendingApproval, 'Awaiting Review', m.pendingApproval > 0 ? 'var(--purple)' : 'var(--text-3)'),
+    '</div>',
+
+    // Progress bar
+    '<div class="tc-progress">',
+    '<div class="tc-progress-top"><span>Completion Rate</span><span style="font-weight:700;color:' + rateColor + '">' + m.completionRate + '%</span></div>',
+    '<div class="prog-bar"><div class="prog-fill ' + progCls + '" style="width:' + m.completionRate + '%"></div></div>',
+    '</div>'
+  ];
+
+  // Projects
+  if (m.projects && m.projects.length > 0) {
+    parts.push('<div class="tc-projects">');
+    parts.push('<div class="tc-projects-title"><i class="fas fa-folder" style="color:var(--blue);margin-right:4px"></i>Projects (' + m.projects.length + ')</div>');
+    var show = m.projects.slice(0, 5);
+    for (var i = 0; i < show.length; i++) {
+      parts.push('<span class="tc-proj-chip">' + escape(show[i].name) + '</span>');
+    }
+    if (m.projects.length > 5) parts.push('<span class="tc-proj-chip" style="background:var(--surface-2);color:var(--text-3)">+' + (m.projects.length-5) + ' more</span>');
+    parts.push('</div>');
+  }
+
+  // Edit / delete actions — Admin only
+  if (isAdmin) {
+    parts.push(
+      '<div class="tc-card-footer">',
+      '<button class="act-btn act-btn-edit"   onclick="openTeamModal(\'' + mid + '\')"                                               title="Edit member"><i class="fas fa-pen"></i></button>',
+      '<button class="act-btn act-btn-delete" onclick="deleteTeamMemberConfirm(\'' + mid + '\',\'' + escape(m.name).replace(/'/g,"\\'") + '\')" title="Remove member"><i class="fas fa-trash"></i></button>',
+      '</div>'
+    );
+  }
+
+  parts.push('</div>');
+  return parts.join('');
+}
+
+function teamStat(val, lbl, color) {
+  return '<div class="t-stat"><div class="t-stat-val" style="color:' + color + '">' + (val||0) + '</div><div class="t-stat-lbl">' + lbl + '</div></div>';
+}
+
+// ─── TEAM MODAL ──────────────────────────────────────────────────────────────
+
+function openTeamModal(memberId) {
+  var isEdit = !!memberId;
+  document.getElementById('teamModalTitle').textContent = isEdit ? 'Edit Team Member' : 'Add Team Member';
+  document.getElementById('memberId').value = memberId || '';
+
+  if (isEdit) {
+    var m = null;
+    for (var i = 0; i < allTeams.length; i++) { if (allTeams[i].id === memberId) { m = allTeams[i]; break; } }
+    if (!m) { toast('Member not found','warning'); return; }
+    document.getElementById('memberName').value   = m.name   || '';
+    document.getElementById('memberRole').value   = m.role   || 'Staff';
+    document.getElementById('memberEmail').value  = m.email  || '';
+    document.getElementById('memberMobile').value = m.mobile || '';
+  } else {
+    document.getElementById('memberName').value   = '';
+    document.getElementById('memberRole').value   = 'Staff';
+    document.getElementById('memberEmail').value  = '';
+    document.getElementById('memberMobile').value = '';
+  }
+  openModal('teamModal');
+}
+
+function saveTeamMember() {
+  var id     = document.getElementById('memberId').value;
+  var name   = document.getElementById('memberName').value.trim();
+  var role   = document.getElementById('memberRole').value;
+  var email  = document.getElementById('memberEmail').value.trim();
+  var mobile = document.getElementById('memberMobile').value.trim();
+  if (!name) { toast('Name is required','warning'); return; }
+
+  showLoading(id ? 'Updating member…' : 'Adding member…');
+  closeModal('teamModal');
+
+  var fn   = id ? 'updateTeamMember' : 'addTeamMember';
+  var args = id ? [id, name, role, email, mobile] : [name, role, email, mobile];
+
+  runServer(fn, args).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      toast(id ? 'Member updated' : 'Member added', 'success');
+      allTeams = [];
+      _pageLoaded['teams'] = false;
+      loadTeamPerformance(_teamPeriodFilter);
+    } else {
+      toast('Error: '+(r&&r.error||'Unknown'),'error');
+    }
+  }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+}
+
+function deleteTeamMemberConfirm(id, name) {
+  confirmDelete('Remove "' + name + '" from the team? Their tasks will remain assigned.', function() {
+    showLoading('Removing member…');
+    runServer('deleteTeamMember', [id]).then(function(r) {
+      hideLoading();
+      if (r && r.success) {
+        toast('Member removed','success');
+        allTeams = [];
+        _pageLoaded['teams'] = false;
+        loadTeamPerformance(_teamPeriodFilter);
+      } else {
+        toast('Error: '+(r&&r.error||'Unknown'),'error');
+      }
+    }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+  });
+}
+</script>

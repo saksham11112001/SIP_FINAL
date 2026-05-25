@@ -1,0 +1,775 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_Utils.html  |  Shared utilities: navigation, modals, toast, loading
+//
+//  CHANGES THIS SESSION:
+//    PART 1 – Role restructuring
+//      • Roles: Admin | Team Leader | Team Member
+//      • _applyRoleVisibility_() hides sidebar nav items not allowed for role
+//      • roleBadge updated for new role names
+//      • pill class updated for Admin (was 'manager')
+//    PART 3 – Controlled Welcome Loader
+//      • _signalDashboardReady_() — called by JS_Dashboard when ALL data +
+//        charts + tables are fully rendered. Only then is the loader dismissed.
+//      • Welcome loader now stays visible until dashboard is truly complete.
+//      • Graceful failsafe: if signal not received within 12s, auto-dismisses.
+// ═══════════════════════════════════════════════════════════════════════════
+
+var currentUser  = {};
+var currentPage  = 'dashboard';
+var allProjects  = [];
+var allTasks     = [];
+var allClients   = [];
+var allTeams     = [];
+var _pageLoaded  = {};
+var _authRetried = false;  // prevents infinite retry loop
+
+// Dashboard-ready sentinel
+var _dashboardReady       = false;
+var _dashboardReadyTimer  = null;  // failsafe timer reference
+
+window.addEventListener('load', function() {
+  setTopbarDate();
+  _showWelcomeLoader_();   // ← show loader immediately, before server call
+  loadCurrentUser();
+});
+
+// ─── WELCOME LOADER ───────────────────────────────────────────────────────────
+//
+//  Full-screen branded splash shown immediately on page load.
+//  Dismissed ONLY via _signalDashboardReady_() — which JS_Dashboard calls
+//  after KPIs, charts, and recent tables all render successfully.
+//  A 12-second failsafe ensures it is never permanently stuck.
+
+function _showWelcomeLoader_() {
+  var existing = document.getElementById('_welcomeLoader');
+  if (existing) return;
+
+  var el = document.createElement('div');
+  el.id  = '_welcomeLoader';
+  el.setAttribute('aria-live', 'polite');
+  el.setAttribute('aria-label', 'Loading Secret Ingredient');
+
+  el.style.cssText =
+    'position:fixed;inset:0;z-index:8000;' +
+    'background:linear-gradient(145deg,#1e3a5f 0%,#2c5282 55%,#1a3352 100%);' +
+    'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+    'font-family:"DM Sans",system-ui,sans-serif;' +
+    'transition:opacity .45s ease, transform .45s ease;';
+
+  el.innerHTML =
+  // Icon
+  '<img src="data:image/png;base64,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" ' +
+  'alt="Secret Ingredient" ' +
+  'style="width:150px;height:150px;object-fit:contain;border-radius:24px;margin-bottom:24px;box-shadow:0 10px 28px rgba(0,0,0,0.22);image-rendering:auto;display:block;">'+
+
+    // App name
+    '<div style="color:rgba(255,255,255,0.55);font-size:11px;letter-spacing:2.5px;' +
+      'text-transform:uppercase;font-weight:700;margin-bottom:8px;">' +
+      'Project Tracker' +
+    '</div>' +
+    '<div style="color:#ffffff;font-size:26px;font-weight:800;letter-spacing:-0.5px;' +
+      'margin-bottom:32px;">' +
+      'Secret Ingredient' +
+    '</div>' +
+
+    // Loading dots
+    '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.6);' +
+        'animation:_wl_dot 1.2s ease-in-out infinite;animation-delay:0s;display:inline-block;"></span>' +
+      '<span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.6);' +
+        'animation:_wl_dot 1.2s ease-in-out infinite;animation-delay:0.2s;display:inline-block;"></span>' +
+      '<span style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.6);' +
+        'animation:_wl_dot 1.2s ease-in-out infinite;animation-delay:0.4s;display:inline-block;"></span>' +
+    '</div>' +
+
+    // Keyframe animations injected inline via <style>
+    '<style>' +
+      '@keyframes _wl_pulse{0%,100%{transform:scale(1);box-shadow:0 8px 32px rgba(0,0,0,.25);}' +
+        '50%{transform:scale(1.06);box-shadow:0 12px 40px rgba(0,0,0,.35);}}' +
+      '@keyframes _wl_dot{0%,80%,100%{transform:scale(.7);opacity:.4;}' +
+        '40%{transform:scale(1.1);opacity:1;}}' +
+      '@keyframes _wl_fadeOut{to{opacity:0;pointer-events:none;}}' +
+    '</style>';
+
+  document.body.appendChild(el);
+}
+
+
+function _hideWelcomeLoader_() {
+  // Clear failsafe timer if we're dismissing early
+  if (_dashboardReadyTimer) {
+    clearTimeout(_dashboardReadyTimer);
+    _dashboardReadyTimer = null;
+  }
+  var el = document.getElementById('_welcomeLoader');
+  if (!el) return;
+  el.style.animation = '_wl_fadeOut .4s ease forwards';
+  setTimeout(function() {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }, 420);
+}
+
+// Called by JS_Dashboard.loadRecentTables() after all data + charts render.
+// This is the ONLY legitimate trigger for hiding the welcome loader (apart
+// from the failsafe timer and access-denied path).
+function _signalDashboardReady_() {
+  if (_dashboardReady) return;   // idempotent — only fire once
+  _dashboardReady = true;
+  _hideWelcomeLoader_();
+}
+
+// ─── PROMISE WRAPPER ─────────────────────────────────────────────────────────
+
+function runServer(fnName, args, _retryCount) {
+  _retryCount = _retryCount || 0;
+  return new Promise(function(resolve, reject) {
+    var runner = google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function(err) {
+        if (_retryCount < 1) {
+          setTimeout(function() {
+            runServer(fnName, args, _retryCount + 1).then(resolve).catch(reject);
+          }, 1200);
+        } else {
+          reject(err);
+        }
+      });
+    if (args && args.length > 0) {
+      runner[fnName].apply(runner, args);
+    } else {
+      runner[fnName]();
+    }
+  });
+}
+
+// ─── USER + ACCESS DENIED ────────────────────────────────────────────────────
+
+// Role → allowed page IDs
+var _ROLE_PAGES = {
+  'Admin'       : ['dashboard','projects','completed','health','gantt','teams','clients','audit'],
+  'Team Leader' : ['dashboard','projects','completed','health','gantt','teams','clients'],
+  'Team Member' : ['dashboard','projects','completed','health','gantt','teams','clients']
+};
+
+// Apply sidebar visibility based on role. Hides nav items and collapses
+// empty nav sections automatically.
+function _applyRoleVisibility_(role) {
+  var allowed = _ROLE_PAGES[role] || _ROLE_PAGES['Team Member'];
+
+  // Toggle nav items
+  document.querySelectorAll('.nav-item[data-page]').forEach(function(item) {
+    var page = item.getAttribute('data-page');
+    item.style.display = (allowed.indexOf(page) !== -1) ? '' : 'none';
+  });
+
+  // Collapse nav sections that have no visible items
+  document.querySelectorAll('.nav-section').forEach(function(section) {
+    var visibleItems = Array.from(section.querySelectorAll('.nav-item[data-page]')).filter(function(el) {
+      return el.style.display !== 'none';
+    });
+    section.style.display = visibleItems.length > 0 ? '' : 'none';
+  });
+}
+
+function loadCurrentUser() {
+  // Keep app shell invisible while auth + dashboard are loading
+  var appEl = document.getElementById('app');
+  if (appEl) appEl.style.opacity = '0';
+
+  google.script.run
+    .withSuccessHandler(function(user) {
+      // ── COLD-START RETRY ───────────────────────────────────────────────────
+      if (user && user.accessDenied && !_authRetried &&
+          user.reason && user.reason.indexOf('email could not be detected') !== -1) {
+        _authRetried = true;
+        setTimeout(loadCurrentUser, 2000);
+        return;
+      }
+
+      // ── ACCESS DENIED ──────────────────────────────────────────────────────
+      if (user && user.accessDenied) {
+        _hideWelcomeLoader_();
+        _showAccessDenied(user);
+        return;
+      }
+
+      // ── GRANTED ─────────────────────────────────────────────────────────────
+      currentUser = user;
+      // Reveal app shell behind the still-visible welcome loader
+      if (appEl) appEl.style.opacity = '';
+
+      var initials = (user.name || '?').split(' ').map(function(n){ return n[0]; }).join('').toUpperCase().slice(0,2);
+      document.getElementById('userAvatar').textContent = initials;
+      document.getElementById('userName').textContent   = user.name || user.email || 'User';
+
+      var pill = document.getElementById('userRolePill');
+      pill.textContent = user.role;
+      // Role pill styling
+      pill.className = 'user-role-pill';
+      if (user.role === 'Admin')        pill.classList.add('admin');
+      if (user.role === 'Team Leader')  pill.classList.add('leader');
+
+      document.getElementById('topbarUserMeta').innerHTML =
+        '<i class="fas fa-user-circle"></i> ' + (user.name || user.email || '') +
+        ' <span class="badge badge-member" style="font-size:10px;margin-left:4px;">' + user.role + '</span>';
+
+      // Apply role-based sidebar visibility
+      _applyRoleVisibility_(user.role);
+
+      // Start dashboard load — loader stays visible until dashboard signals ready
+      showPage('dashboard', document.getElementById('nav-dashboard'));
+    })
+    .withFailureHandler(function(err) {
+      _hideWelcomeLoader_();
+      _showAccessDenied({
+        email       : '',
+        accessDenied: true,
+        reason      : 'Could not connect to the server. ' +
+                      (err && err.message ? err.message : 'Please refresh the page.')
+      });
+    })
+    .getCurrentUser();
+}
+
+function _showAccessDenied(user) {
+  var appEl = document.getElementById('app');
+  if (appEl) appEl.style.display = 'none';
+
+  var existing = document.getElementById('accessDeniedScreen');
+  if (existing) existing.remove();
+
+  var email  = user.email  || '';
+  var reason = user.reason || 'You do not have permission to access this application.';
+
+  var el = document.createElement('div');
+  el.id  = 'accessDeniedScreen';
+  el.style.cssText =
+    'position:fixed;inset:0;background:#f1f5f9;display:flex;align-items:center;' +
+    'justify-content:center;z-index:9999;font-family:"DM Sans",system-ui,sans-serif;';
+
+  el.innerHTML =
+    '<div style="max-width:480px;width:92%;background:#fff;border-radius:16px;' +
+    'box-shadow:0 8px 40px rgba(0,0,0,.12);overflow:hidden;">' +
+
+    '<div style="background:linear-gradient(135deg,#1e3a5f 0%,#2c5282 100%);padding:28px 32px;">' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+    '<div style="width:44px;height:44px;background:rgba(255,255,255,.15);border-radius:12px;' +
+    'display:flex;align-items:center;justify-content:center;font-size:22px;">🍽️</div>' +
+    '<div><div style="color:rgba(255,255,255,.65);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-weight:600;">Secret Ingredient</div>' +
+    '<div style="color:#fff;font-size:15px;font-weight:700;">Project Tracker</div></div></div>' +
+    '<div style="width:56px;height:56px;background:rgba(239,68,68,.2);border-radius:50%;' +
+    'display:flex;align-items:center;justify-content:center;font-size:26px;margin-bottom:12px;">🔒</div>' +
+    '<h1 style="color:#fff;font-size:22px;font-weight:800;margin:0 0 4px;">Access Denied</h1>' +
+    '<p style="color:rgba(255,255,255,.7);font-size:13px;margin:0;">This application is restricted to registered team members.</p>' +
+    '</div>' +
+
+    '<div style="padding:28px 32px;">' +
+    (email ? '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;">' +
+    '<span style="color:#64748b;">Signed in as:</span><br>' +
+    '<strong style="color:#1e293b;">' + email + '</strong>' +
+    '</div>' : '') +
+    '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;' +
+    'margin-bottom:20px;font-size:13px;color:#dc2626;line-height:1.6;">' +
+    '<i class="fas fa-circle-xmark" style="margin-right:6px;"></i>' + reason +
+    '</div>' +
+    '<div style="font-size:12px;color:#94a3b8;line-height:1.7;">' +
+    '<strong style="color:#64748b;display:block;margin-bottom:6px;">What to do:</strong>' +
+    '① Make sure you are signed into the correct Google account.<br>' +
+    '② Ask your administrator to add your email to the team registry.<br>' +
+    '③ Reload this page after your account is registered.' +
+    '</div>' +
+    '<button onclick="location.reload()" style="margin-top:20px;width:100%;padding:12px;' +
+    'background:#1e3a5f;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;' +
+    'cursor:pointer;font-family:inherit;">↻ Reload Page</button>' +
+    '</div>' +
+    '</div>';
+
+  document.body.appendChild(el);
+}
+
+// ─── NAVIGATION ─────────────────────────────────────────────────────────────
+
+var PAGE_TITLES = {
+  dashboard  : 'Dashboard',
+  projects   : 'Projects & Tasks',
+  completed  : 'Completed Projects',
+  health     : 'Project Health',
+  gantt      : 'Project Timeline',
+  teams      : 'Team Performance',
+  clients    : 'Clients',
+  audit      : 'Audit Log'
+};
+
+function showPage(pageId, navEl, forceReload) {
+  // Guard: check if this page is allowed for current role
+  var role    = (currentUser && currentUser.role) || '';
+  var allowed = _ROLE_PAGES[role] || [];
+  // Allow if no role yet (auth still in progress) or if page is permitted
+  if (role && allowed.length && allowed.indexOf(pageId) === -1) {
+    // Redirect to first allowed page instead
+    pageId = allowed[0] || 'dashboard';
+  }
+
+  document.querySelectorAll('.page').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n){ n.classList.remove('active'); });
+
+  var page = document.getElementById('page-' + pageId);
+  if (page) page.classList.add('active');
+
+  var navItem = navEl || document.getElementById('nav-' + pageId);
+  if (navItem) navItem.classList.add('active');
+
+  document.getElementById('pageTitle').textContent = PAGE_TITLES[pageId] || pageId;
+  currentPage = pageId;
+
+  var userExplicitClick = !!navEl;
+  if (_pageLoaded[pageId] && !forceReload && !userExplicitClick) return;
+  _pageLoaded[pageId] = true;
+
+  if      (pageId === 'dashboard')  loadDashboard();
+  else if (pageId === 'projects')   loadProjectsPage();
+  else if (pageId === 'completed')  loadCompletedProjects();
+  else if (pageId === 'health')     loadHealthPage();
+  else if (pageId === 'gantt')      loadGanttPage();
+  else if (pageId === 'teams')      loadTeamPerformance();
+  else if (pageId === 'clients')    loadClients();
+  else if (pageId === 'audit')      loadAuditLog();
+}
+
+function refreshCurrentPage() {
+  _pageLoaded[currentPage] = false;
+  showPage(currentPage, null, true);
+}
+
+// ─── SIDEBAR ────────────────────────────────────────────────────────────────
+
+function toggleSidebar() {
+  var sb = document.getElementById('sidebar');
+  if (window.innerWidth <= 768) {
+    var opening = !sb.classList.contains('open');
+    sb.classList.toggle('open');
+    if (opening) {
+      document.body.classList.add('sidebar-open');
+    } else {
+      document.body.classList.remove('sidebar-open');
+    }
+  } else {
+    sb.classList.toggle('collapsed');
+  }
+}
+
+document.addEventListener('click', function(e) {
+  if (window.innerWidth > 768) return;
+  var sb = document.getElementById('sidebar');
+  if (sb.classList.contains('open') && !sb.contains(e.target)) {
+    sb.classList.remove('open');
+    document.body.classList.remove('sidebar-open');
+  }
+});
+
+// ─── TOPBAR DATE ─────────────────────────────────────────────────────────────
+
+function setTopbarDate() {
+  var now  = new Date();
+  var opts = { weekday:'short', day:'2-digit', month:'short', year:'numeric' };
+  document.getElementById('topbarDate').textContent = now.toLocaleDateString('en-IN', opts);
+}
+
+// ─── MODALS ──────────────────────────────────────────────────────────────────
+
+function openModal(id) {
+  var m = document.getElementById(id);
+  if (m) m.classList.add('open');
+}
+function closeModal(id) {
+  var m = document.getElementById(id);
+  if (m) m.classList.remove('open');
+}
+
+document.addEventListener('click', function(e) {
+  if (e.target.classList.contains('modal-backdrop')) {
+    e.target.classList.remove('open');
+  }
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-backdrop.open').forEach(function(m) {
+      m.classList.remove('open');
+    });
+  }
+});
+
+// ─── LOADING ─────────────────────────────────────────────────────────────────
+
+function showLoading(msg) {
+  var label = document.getElementById('loadingLabel');
+  if (label) label.textContent = msg || 'Loading…';
+  document.getElementById('loadingOverlay').classList.add('active');
+}
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.remove('active');
+}
+
+// ─── SKELETON HELPERS ────────────────────────────────────────────────────────
+
+function skeletonRows(cols, rows) {
+  rows = rows || 5;
+  var widths = ['60%','40%','30%','20%','25%'];
+  var out = '';
+  for (var r = 0; r < rows; r++) {
+    out += '<tr class="skeleton-row">';
+    for (var c = 0; c < cols; c++) {
+      out += '<td><div class="skeleton-line" style="width:' + (widths[c % widths.length]) + '"></div></td>';
+    }
+    out += '</tr>';
+  }
+  return out;
+}
+
+function skeletonCards(count) {
+  count = count || 4;
+  var out = '';
+  for (var i = 0; i < count; i++) {
+    out += '<div class="skeleton-card">' +
+      '<div class="skeleton-line" style="width:40%;height:32px;margin-bottom:10px"></div>' +
+      '<div class="skeleton-line" style="width:70%"></div>' +
+      '<div class="skeleton-line" style="width:50%;margin-top:8px"></div>' +
+      '</div>';
+  }
+  return out;
+}
+
+// ─── TOAST ───────────────────────────────────────────────────────────────────
+
+function toast(msg, type, duration) {
+  type     = type     || 'info';
+  duration = duration || 3500;
+  var icons = {
+    success: 'fa-circle-check', error: 'fa-circle-xmark',
+    warning: 'fa-triangle-exclamation', info: 'fa-circle-info'
+  };
+  var el = document.createElement('div');
+  el.className = 'toast toast-' + type;
+  el.innerHTML = '<i class="fas ' + (icons[type]||icons.info) + '"></i>' +
+    '<span class="toast-msg">' + msg + '</span>';
+  document.getElementById('toastStack').appendChild(el);
+  setTimeout(function() {
+    el.style.animation = 'toastIn .25s ease reverse';
+    setTimeout(function() { el.remove(); }, 280);
+  }, duration);
+}
+
+// ─── CONFIRM DIALOG ──────────────────────────────────────────────────────────
+
+function confirmDelete(message, onConfirm) {
+  document.getElementById('confirmText').textContent = message || 'Are you sure?';
+  var btn    = document.getElementById('confirmBtn');
+  var newBtn = btn.cloneNode(true);
+  btn.parentNode.replaceChild(newBtn, btn);
+  newBtn.addEventListener('click', function() {
+    closeModal('confirmModal');
+    onConfirm();
+  });
+  openModal('confirmModal');
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+function fmtDate(s) {
+  if (!s) return '—';
+  var d = new Date(s);
+  if (isNaN(d)) return s;
+  return d.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+// ─── Shared robust date parser ────────────────────────────────────────────────
+// getProjects() uses sheetDisplayValues() so dates arrive as locale strings,
+// e.g. "01/04/2026" or "01-04-2026" (DD/MM/YYYY in Indian locale).
+// new Date() cannot parse these reliably in Chrome.
+// This function handles ISO, MM/DD/YYYY, DD/MM/YYYY, DD-MM-YYYY, and common
+// human-readable formats, and is used by every date utility in the frontend.
+function _parseDate_(s) {
+  if (!s) return null;
+  s = String(s).trim();
+  if (!s) return null;
+
+  // 1. Standard parse (ISO "YYYY-MM-DD", "Month D YYYY", M/D/YYYY etc.)
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) { d.setHours(0, 0, 0, 0); return d; }
+
+  // 2. DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (Indian locale display values)
+  var m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (m) {
+    var a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+    if (y < 100) y += 2000;
+    // Prefer DD/MM/YYYY (Indian): a=day, b=month
+    if (a >= 1 && a <= 31 && b >= 1 && b <= 12) {
+      var d1 = new Date(y, b - 1, a);
+      if (!isNaN(d1.getTime())) { d1.setHours(0, 0, 0, 0); return d1; }
+    }
+    // Fallback MM/DD/YYYY: a=month, b=day
+    if (a >= 1 && a <= 12 && b >= 1 && b <= 31) {
+      var d2 = new Date(y, a - 1, b);
+      if (!isNaN(d2.getTime())) { d2.setHours(0, 0, 0, 0); return d2; }
+    }
+  }
+
+  // 3. "01 Apr 2026", "Apr 01 2026", "1-Apr-2026" etc. — normalise and retry
+  var d3 = new Date(s.replace(/[\.\-]/g, ' '));
+  if (!isNaN(d3.getTime())) { d3.setHours(0, 0, 0, 0); return d3; }
+
+  return null;
+}
+
+function toInputDate(s) {
+  if (!s) return '';
+  var d = _parseDate_(s);
+  if (!d) return '';
+  // Build YYYY-MM-DD in LOCAL time (avoids UTC-midnight off-by-one in IST)
+  var mm = String(d.getMonth() + 1).padStart(2, '0');
+  var dd = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + mm + '-' + dd;
+}
+
+function daysFromToday(s) {
+  if (!s) return null;
+  var d = _parseDate_(s);
+  if (!d) return null;
+  var t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.ceil((d - t) / 86400000);
+}
+
+function isOverdue(s, status) {
+  if (!s || status === 'Completed') return false;
+  return daysFromToday(s) < 0;
+}
+
+function dueDaysLabel(s, status) {
+  if (status === 'Completed') return '';
+  var d = daysFromToday(s);
+  if (d === null) return '';
+  if (d < 0)  return '<span class="overdue-meta"><i class="fas fa-circle-exclamation"></i> ' + Math.abs(d) + 'd overdue</span>';
+  if (d === 0) return '<span style="color:var(--amber);font-weight:600"><i class="fas fa-clock"></i> Due today</span>';
+  if (d <= 3)  return '<span style="color:var(--amber)"><i class="fas fa-clock"></i> ' + d + 'd left</span>';
+  return '<i class="fas fa-calendar-days"></i> ' + d + 'd';
+}
+
+function statusBadge(s) {
+  var map = {
+    'Active'     : 'badge-active',
+    'Completed'  : 'badge-completed',
+    'In Progress': 'badge-in-progress',
+    'Not Started': 'badge-not-started',
+    'On Hold'    : 'badge-on-hold',
+    'Overdue'    : 'badge-overdue'
+  };
+  return '<span class="badge ' + (map[s]||'badge-not-started') + '">' + (s||'—') + '</span>';
+}
+
+function priorityBadge(p) {
+  var cls = { High:'badge-high', Medium:'badge-medium', Low:'badge-low' };
+  return '<span class="badge ' + (cls[p]||'badge-medium') + '">' + (p||'Medium') + '</span>';
+}
+
+function approvalBadge(a) {
+  if (!a) return '';
+  var cls = {
+    'Pending'            : 'ab-pending',
+    'Pending TL'         : 'ab-pending',
+    'Pending Lead Review': 'ab-pending',
+    'Approved'           : 'ab-approved',
+    'Rejected'           : 'ab-rejected'
+  };
+  var icon = {
+    'Pending'            : 'fa-hourglass-half',
+    'Pending TL'         : 'fa-hourglass-half',
+    'Pending Lead Review': 'fa-hourglass-half',
+    'Approved'           : 'fa-check',
+    'Rejected'           : 'fa-xmark'
+  };
+  return '<span class="ab ' + (cls[a] || 'ab-pending') + '"><i class="fas ' + (icon[a] || 'fa-hourglass-half') + '"></i>' + a + '</span>';
+}
+
+function roleBadge(r) {
+  // Updated for new role names; backward-compat with old names
+  var cls = {
+    'Admin'       : 'badge-manager',
+    'Team Leader' : 'badge-lead',
+    'Team Lead'   : 'badge-lead',
+    'Team Member' : 'badge-member',
+    'Staff'       : 'badge-member',
+    'Consultant'  : 'badge-consultant'
+  };
+  return '<span class="badge ' + (cls[r]||'badge-member') + '">' + (r||'Member') + '</span>';
+}
+
+function emptyState(icon, title, sub) {
+  return '<div class="empty-state"><i class="fas ' + icon + '"></i><p>' + title + '</p><small>' + sub + '</small></div>';
+}
+
+function escape(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function populateSelect(id, items, valueKey, labelKey, currentVal) {
+  var sel = document.getElementById(id);
+  if (!sel) return;
+  var first = Array.from(sel.options).slice(0,1).map(function(o){ return o.outerHTML; }).join('');
+  sel.innerHTML = first;
+  items.forEach(function(item) {
+    var opt = document.createElement('option');
+    opt.value = item[valueKey];
+    opt.textContent = item[labelKey];
+    if (currentVal && item[valueKey] === currentVal) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+function updateDecisionUI() { /* CSS handles radio button styling */ }
+
+// ─── MULTI-SELECT CHIP WIDGET ─────────────────────────────────────────────────
+
+var _msState = {};
+
+function initMultiSelect(wrapperId, items, selectedValues, options) {
+  var wrap = document.getElementById(wrapperId);
+  if (!wrap) return;
+  options        = options        || {};
+  selectedValues = selectedValues || [];
+  _msState[wrapperId] = {
+    items      : items.slice(),
+    selected   : selectedValues.slice(),
+    single     : !!options.single,
+    placeholder: options.placeholder || (options.single ? 'Select…' : 'Select members…'),
+    callback   : null
+  };
+  wrap.innerHTML = _msBuildHTML(wrapperId);
+  _msBindEvents(wrapperId);
+}
+
+function _msBuildHTML(id) {
+  var s   = _msState[id];
+  var sel = s.selected;
+  var chipsHtml = '';
+  for (var i = 0; i < sel.length; i++) {
+    chipsHtml +=
+      '<span class="ms-chip">' +
+        '<span style="overflow:hidden;text-overflow:ellipsis">' + escape(sel[i]) + '</span>' +
+        '<span class="ms-chip-remove" data-val="' + escape(sel[i]) + '" onclick="msRemoveChip(\'' + id + '\',this);event.stopPropagation()"><i class="fas fa-times"></i></span>' +
+      '</span>';
+  }
+  var placeholder = sel.length === 0
+    ? '<span class="ms-placeholder">' + escape(s.placeholder) + '</span>' : '';
+  var searchInput = s.single && sel.length > 0
+    ? ''
+    : '<input class="ms-search" id="' + id + '_search" type="text" placeholder="" autocomplete="off" oninput="msFilter(\'' + id + '\')" onclick="event.stopPropagation()">';
+  var boxHtml = '<div class="ms-box" id="' + id + '_box" onclick="msToggle(\'' + id + '\')">' + chipsHtml + placeholder + searchInput + '</div>';
+  var optsHtml = '';
+  for (var j = 0; j < s.items.length; j++) {
+    var v = s.items[j];
+    var isSel = sel.indexOf(v) !== -1;
+    optsHtml += '<div class="ms-option ' + (isSel?'selected':'') + '" data-val="' + escape(v) + '" onclick="msToggleOption(\'' + id + '\',this)">' +
+      '<span class="ms-check">' + (isSel?'<i class="fas fa-check"></i>':'') + '</span>' + escape(v) + '</div>';
+  }
+  if (!optsHtml) optsHtml = '<div class="ms-empty">No options available</div>';
+  return boxHtml + '<div class="ms-dropdown" id="' + id + '_drop">' + optsHtml + '</div>';
+}
+
+function _msBindEvents(id) {
+  document.addEventListener('click', function(e) {
+    var wrap = document.getElementById(id);
+    if (wrap && !wrap.contains(e.target)) msClose(id);
+  });
+}
+
+function msToggle(id) {
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  var isOpen = wrap.classList.contains('open');
+  document.querySelectorAll('.ms-wrap.open').forEach(function(w) { if (w.id !== id) w.classList.remove('open'); });
+  if (isOpen) { wrap.classList.remove('open'); }
+  else {
+    wrap.classList.add('open');
+    var search = document.getElementById(id + '_search');
+    if (search) { search.value = ''; msFilter(id); search.focus(); }
+  }
+}
+
+function msClose(id) {
+  var wrap = document.getElementById(id);
+  if (wrap) wrap.classList.remove('open');
+}
+
+function msToggleOption(id, optEl) {
+  var s   = _msState[id];
+  var val = optEl.getAttribute('data-val');
+  var idx = s.selected.indexOf(val);
+  if (idx !== -1) { s.selected.splice(idx, 1); }
+  else { if (s.single) { s.selected = [val]; } else { s.selected.push(val); } }
+  var wrap = document.getElementById(id);
+  var wasOpen = wrap && wrap.classList.contains('open');
+  wrap.innerHTML = _msBuildHTML(id);
+  if (wasOpen && !s.single) { wrap.classList.add('open'); var sr = document.getElementById(id+'_search'); if(sr) sr.focus(); }
+  else if (s.single) msClose(id);
+  if (s.callback) s.callback();
+}
+
+function msRemoveChip(id, chipEl) {
+  var s = _msState[id];
+  var val = chipEl.getAttribute('data-val');
+  var idx = s.selected.indexOf(val);
+  if (idx !== -1) s.selected.splice(idx, 1);
+  var wrap = document.getElementById(id);
+  var isOpen = wrap && wrap.classList.contains('open');
+  wrap.innerHTML = _msBuildHTML(id);
+  if (isOpen) wrap.classList.add('open');
+  if (s.callback) s.callback();
+}
+
+function msFilter(id) {
+  var search = document.getElementById(id + '_search');
+  if (!search) return;
+  var q    = search.value.toLowerCase();
+  var drop = document.getElementById(id + '_drop');
+  if (!drop) return;
+  var opts = drop.querySelectorAll('.ms-option');
+  opts.forEach(function(opt) {
+    var v = (opt.getAttribute('data-val') || '').toLowerCase();
+    opt.style.display = (!q || v.indexOf(q) !== -1) ? '' : 'none';
+  });
+}
+
+function getMultiSelectValues(id) {
+  var s = _msState[id];
+  return s ? s.selected.slice() : [];
+}
+
+function getMultiSelectString(id) {
+  return getMultiSelectValues(id).join(', ');
+}
+
+function setMultiSelectValues(id, valuesArray) {
+  var s = _msState[id];
+  if (!s) return;
+  s.selected = (valuesArray || []).filter(function(v){ return v && v.trim(); });
+  var wrap   = document.getElementById(id);
+  var isOpen = wrap && wrap.classList.contains('open');
+  if (wrap) { wrap.innerHTML = _msBuildHTML(id); if (isOpen) wrap.classList.add('open'); }
+}
+
+function refreshMultiSelectItems(id, items) {
+  var s = _msState[id];
+  if (!s) return;
+  s.items = items.slice();
+  var wrap   = document.getElementById(id);
+  var isOpen = wrap && wrap.classList.contains('open');
+  if (wrap) { wrap.innerHTML = _msBuildHTML(id); if (isOpen) wrap.classList.add('open'); }
+}
+
+// Register a change callback for a multi-select. Called after every selection change.
+function _msOnChange(id, fn) {
+  if (_msState[id]) _msState[id].callback = fn;
+}
+</script>

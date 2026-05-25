@@ -1,0 +1,226 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_Clients.html  |  Clients page + Audit Log page
+//
+//  PERF CHANGES:
+//    1. loadClients()   — parallel fetch via Promise.all(runServer × 2)
+//    2. loadAuditLog()  — uses runServer() Promise wrapper
+//    3. All save/delete — use runServer() Promise wrapper
+//    4. Table renders   — HTML built in string arrays, single innerHTML assign
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CLIENTS PAGE
+// ═══════════════════════════════════════════════════════════════════════════
+
+function loadClients() {
+  var tbody = document.getElementById('clientsTableBody');
+  if (tbody) tbody.innerHTML = skeletonRows(5, 5);
+
+  Promise.all([
+    runServer('getClients'),
+    runServer('getProjects')
+  ]).then(function(results) {
+    allClients  = results[0] || [];
+    allProjects = results[1] || [];
+    renderClientsTable(allClients, allProjects);
+  }).catch(function() {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5">' + emptyState('fa-circle-exclamation','Error loading clients','Please refresh') + '</td></tr>';
+    toast('Error loading clients', 'error');
+  });
+}
+
+function renderClientsTable(clients, projects) {
+  var tbody     = document.getElementById('clientsTableBody');
+  if (!tbody) return;
+  var isAdmin = currentUser.role === 'Admin';
+
+  if (!clients || clients.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5">' + emptyState('fa-briefcase','No clients yet','Add your first client') + '</td></tr>';
+    return;
+  }
+
+  // Pre-compute project counts once — avoid nested .filter inside loop
+  var projCount  = {};
+  var activeProj = {};
+  for (var pi = 0; pi < projects.length; pi++) {
+    var c = projects[pi].client;
+    if (!c) continue;
+    projCount[c]  = (projCount[c]  || 0) + 1;
+    if (projects[pi].status === 'Active') activeProj[c] = (activeProj[c] || 0) + 1;
+  }
+
+  var rows = [];
+  for (var i = 0; i < clients.length; i++) {
+    var cl  = clients[i];
+    var pc  = projCount[cl.name]  || 0;
+    var ac  = activeProj[cl.name] || 0;
+    var cid = escape(cl.id);
+
+    rows.push(
+      '<tr>' +
+      '<td><div style="display:flex;align-items:center;gap:10px">' +
+        '<div style="width:34px;height:34px;background:linear-gradient(135deg,var(--navy),var(--navy-light));border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700;flex-shrink:0">' + escape((cl.name||'?')[0].toUpperCase()) + '</div>' +
+        '<span style="font-weight:600">' + escape(cl.name) + '</span>' +
+      '</div></td>' +
+      '<td><span class="badge badge-member">' + escape(cl.type||'—') + '</span></td>' +
+      '<td><span style="font-size:12px;color:var(--text-3)">' + escape(cl.createdDate||'—') + '</span></td>' +
+      '<td><span style="font-weight:600;color:var(--text-1)">' + pc + '</span>' +
+        (ac > 0 ? ' <span class="badge badge-active" style="font-size:10px">' + ac + ' active</span>' : '') +
+      '</td>' +
+      '<td>' +
+        (isAdmin
+          ? '<button class="act-btn act-btn-edit"   onclick="openClientModal(\'' + cid + '\')" title="Edit"><i class="fas fa-pen"></i></button> ' +
+            '<button class="act-btn act-btn-delete" onclick="deleteClientConfirm(\'' + cid + '\',\'' + escape(cl.name).replace(/'/g,"\\'") + '\')" title="Delete"><i class="fas fa-trash"></i></button>'
+          : '—') +
+      '</td>' +
+      '</tr>'
+    );
+  }
+  tbody.innerHTML = rows.join('');
+}
+
+function openClientModal(clientId) {
+  var isEdit = !!clientId;
+  document.getElementById('clientModalTitle').textContent = isEdit ? 'Edit Client' : 'Add Client';
+  document.getElementById('clientId').value = clientId || '';
+
+  if (isEdit) {
+    var c = null;
+    for (var i = 0; i < allClients.length; i++) { if (allClients[i].id === clientId) { c = allClients[i]; break; } }
+    if (!c) return;
+    document.getElementById('clientName').value = c.name || '';
+    document.getElementById('clientType').value = c.type || 'Other';
+  } else {
+    document.getElementById('clientName').value = '';
+    document.getElementById('clientType').value = 'Other';
+  }
+  openModal('clientModal');
+}
+
+function saveClient() {
+  var id   = document.getElementById('clientId').value;
+  var name = document.getElementById('clientName').value.trim();
+  var type = document.getElementById('clientType').value;
+  if (!name) { toast('Client name is required','warning'); return; }
+
+  showLoading(id ? 'Updating client…' : 'Adding client…');
+  closeModal('clientModal');
+
+  var fn   = id ? 'updateClient' : 'addClient';
+  var args = id ? [id, name, type] : [name, type];
+
+  runServer(fn, args).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      toast(id ? 'Client updated' : 'Client added', 'success');
+      allClients = [];
+      _pageLoaded['clients'] = false;
+      loadClients();
+    } else {
+      toast('Error: '+(r&&r.error||'Unknown'),'error');
+    }
+  }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+}
+
+function deleteClientConfirm(id, name) {
+  confirmDelete('Delete client "' + name + '"? Their projects will remain.', function() {
+    showLoading('Deleting client…');
+    runServer('deleteClient', [id]).then(function(r) {
+      hideLoading();
+      if (r && r.success) {
+        toast('Client deleted','success');
+        allClients = [];
+        _pageLoaded['clients'] = false;
+        loadClients();
+      } else {
+        toast('Error: '+(r&&r.error||'Unknown'),'error');
+      }
+    }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AUDIT LOG PAGE
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _auditData = [];
+
+function loadAuditLog() {
+  var tbody = document.getElementById('auditTableBody');
+  if (tbody) tbody.innerHTML = skeletonRows(5, 8);
+
+  runServer('getAuditLog').then(function(logs) {
+    _auditData = logs || [];
+    renderAuditTable(_auditData);
+  }).catch(function() {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5">' + emptyState('fa-shield-alt','Error loading audit log','Please refresh') + '</td></tr>';
+  });
+}
+
+function renderAuditTable(logs) {
+  var tbody = document.getElementById('auditTableBody');
+  if (!tbody) return;
+
+  if (!logs || logs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5">' + emptyState('fa-shield-alt','No audit records','Actions will be logged here') + '</td></tr>';
+    return;
+  }
+
+  var actionMap = {
+    CREATE_PROJECT:'badge-active,fa-plus-circle',
+    UPDATE_PROJECT:'badge-in-progress,fa-pen',
+    DELETE_PROJECT:'badge-overdue,fa-trash',
+    CREATE_TASK:'badge-active,fa-plus',
+    UPDATE_TASK:'badge-in-progress,fa-pen',
+    STATUS_UPDATE:'badge-on-hold,fa-rotate',
+    DELETE_TASK:'badge-overdue,fa-trash',
+    APPROVED:'badge-approved,fa-check',
+    REJECTED:'badge-rejected,fa-xmark',
+    CREATE_CLIENT:'badge-active,fa-plus',
+    UPDATE_CLIENT:'badge-in-progress,fa-pen',
+    DELETE_CLIENT:'badge-overdue,fa-trash',
+    CREATE_MEMBER:'badge-active,fa-user-plus',
+    UPDATE_MEMBER:'badge-in-progress,fa-pen',
+    DELETE_MEMBER:'badge-overdue,fa-user-minus',
+    EMAIL_SENT:'badge-in-progress,fa-envelope',
+    MORNING_DIGEST:'badge-in-progress,fa-sun',
+    OVERDUE_ALERT:'badge-overdue,fa-bell',
+    WEEKLY_SUMMARY:'badge-manager,fa-chart-bar'
+  };
+
+  var rows = [];
+  for (var i = 0; i < logs.length; i++) {
+    var log    = logs[i];
+    var spec   = (actionMap[log.action] || 'badge-not-started,fa-circle').split(',');
+    var cls    = spec[0], icon = spec[1];
+    var lbl    = (log.action||'').replace(/_/g,' ');
+    var uinit  = escape((log.user||'?')[0].toUpperCase());
+
+    rows.push(
+      '<tr>' +
+      '<td><span style="font-family:\'DM Mono\',monospace;font-size:11px;color:var(--text-3)">' + escape(log.timestamp||'') + '</span></td>' +
+      '<td><div style="display:flex;align-items:center;gap:6px">' +
+        '<div style="width:26px;height:26px;background:linear-gradient(135deg,var(--navy),var(--blue));border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700">' + uinit + '</div>' +
+        '<span style="font-weight:500;font-size:13px">' + escape(log.user||'System') + '</span>' +
+      '</div></td>' +
+      '<td><span class="badge ' + cls + '"><i class="fas ' + icon + '"></i>' + escape(lbl) + '</span></td>' +
+      '<td><span class="badge badge-not-started" style="font-size:10px">' + escape(log.entityType||'—') + '</span></td>' +
+      '<td><span style="font-size:12px;color:var(--text-2)">' + escape(log.details||'—') + '</span></td>' +
+      '</tr>'
+    );
+  }
+  tbody.innerHTML = rows.join('');
+}
+
+function filterAuditLog() {
+  var q = (document.getElementById('auditSearch').value||'').toLowerCase();
+  if (!q) { renderAuditTable(_auditData); return; }
+  var filtered = _auditData.filter(function(log) {
+    return ['user','action','entityType','details','timestamp'].some(function(k){
+      return (log[k]||'').toLowerCase().indexOf(q) !== -1;
+    });
+  });
+  renderAuditTable(filtered);
+}
+</script>

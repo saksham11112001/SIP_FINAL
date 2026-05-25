@@ -1,0 +1,199 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_Gantt.html  |  Project Timeline (Gantt-style) View
+//
+//  Pure CSS/HTML horizontal bar chart — no additional library.
+//  Layout:
+//    Left: fixed 220px label column (project names)
+//    Right: scrollable timeline column
+//           • Month tick header
+//           • Project bar + task diamond markers
+//           • Today line (red vertical rule)
+//
+//  All x-axis percentages are relative to the TIMELINE COLUMN width,
+//  ensuring month ticks, bars, task markers, and the today line all align.
+//
+//  Called by: showPage('gantt') in JS_Utils.html
+// ═══════════════════════════════════════════════════════════════════════════
+
+function loadGanttPage() {
+  var content = document.getElementById('ganttContent');
+  if (content) content.innerHTML =
+    '<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading timeline…</p></div>';
+
+  runServer('getGanttData')
+    .then(function(data) { renderGantt(data); })
+    .catch(function(err) {
+      var c = document.getElementById('ganttContent');
+      if (c) c.innerHTML =
+        '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i>' +
+        '<p>Could not load timeline</p><small>' + (err && err.message ? err.message : '') + '</small></div>';
+    });
+}
+
+// ─── Main render ─────────────────────────────────────────────────────────────
+
+function renderGantt(projects) {
+  var content = document.getElementById('ganttContent');
+  if (!content) return;
+
+  if (!projects || projects.length === 0) {
+    content.innerHTML = emptyState('fa-chart-gantt', 'No active projects', 'All projects are completed or none exist yet.');
+    return;
+  }
+
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+
+  // ── Compute timeline bounds ──────────────────────────────────────────────
+  var minDate = null, maxDate = null;
+  projects.forEach(function(p) {
+    var s = p.startDate ? new Date(p.startDate) : null;
+    var e = p.deadline  ? new Date(p.deadline)  : null;
+    if (s && (!minDate || s < minDate)) minDate = new Date(s);
+    if (e && (!maxDate || e > maxDate)) maxDate = new Date(e);
+    (p.tasks || []).forEach(function(t) {
+      var td = t.dueDate ? new Date(t.dueDate) : null;
+      if (td && (!maxDate || td > maxDate)) maxDate = new Date(td);
+    });
+  });
+
+  if (!minDate) { minDate = new Date(today); minDate.setDate(minDate.getDate() - 30); }
+  if (!maxDate) { maxDate = new Date(today); maxDate.setDate(maxDate.getDate() + 90); }
+
+  var totalDays  = Math.max(1, Math.ceil((maxDate - minDate) / 86400000));
+  var padDays    = Math.max(3, Math.round(totalDays * 0.05));
+  var rangeStart = new Date(minDate); rangeStart.setDate(rangeStart.getDate() - padDays);
+  var rangeEnd   = new Date(maxDate); rangeEnd.setDate(rangeEnd.getDate() + padDays);
+  var rangeDays  = Math.ceil((rangeEnd - rangeStart) / 86400000);
+
+  // pct() converts a date to a % of the TIMELINE COLUMN width
+  function pct(date) {
+    if (!date) return null;
+    var d = new Date(date); d.setHours(0, 0, 0, 0);
+    return Math.max(0, Math.min(100, ((d - rangeStart) / (rangeDays * 86400000)) * 100));
+  }
+
+  var todayPct = pct(today);
+
+  // ── Build HTML ────────────────────────────────────────────────────────────
+  // Month ticks (inside timeline column)
+  var monthCells = '';
+  var cur = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+  while (cur <= rangeEnd) {
+    var nextMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    var startPct  = pct(cur < rangeStart ? rangeStart : new Date(cur));
+    var endPct    = pct(nextMonth > rangeEnd ? rangeEnd : new Date(nextMonth));
+    var width     = Math.max(0, endPct - startPct);
+    var label     = cur.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+    monthCells += '<div class="gantt-month-cell" style="left:' + startPct.toFixed(2) + '%;width:' + width.toFixed(2) + '%;">' + label + '</div>';
+    cur = nextMonth;
+  }
+
+  // Project label rows (left column)
+  var labelRows = '';
+  // Track rows (right column)
+  var trackRows = '';
+
+  projects.forEach(function(p) {
+    var tasks = p.tasks || [];
+
+    // Label
+    var overdueCount = tasks.filter(function(t) {
+      if (t.status === 'Completed') return false;
+      if (!t.dueDate) return false;
+      var d = new Date(t.dueDate); d.setHours(0, 0, 0, 0);
+      return d < today;
+    }).length;
+
+    labelRows +=
+      '<div class="gantt-label-row">' +
+        '<div class="gantt-label-text">' +
+          '<span class="gantt-proj-name" title="' + escape(p.name) + '">' + escape(p.name) + '</span>' +
+          '<span class="gantt-proj-meta">' + escape(p.client || '') +
+            (tasks.length ? ' · ' + tasks.length + ' tasks' : '') +
+            (overdueCount > 0 ? ' · <span style="color:#ef4444">' + overdueCount + ' overdue</span>' : '') +
+          '</span>' +
+        '</div>' +
+      '</div>';
+
+    // Project bar
+    var startPct = pct(p.startDate);
+    var endPct   = pct(p.deadline);
+    var barHtml  = '';
+    if (startPct !== null && endPct !== null) {
+      var barWidth = Math.max(0.5, endPct - startPct);
+      var holdCls  = p.status === 'On Hold' ? ' gantt-bar-hold' : '';
+      barHtml = '<div class="gantt-bar' + holdCls + '" ' +
+        'style="left:' + startPct.toFixed(2) + '%;width:' + barWidth.toFixed(2) + '%;" ' +
+        'title="' + escape(p.name) + ': ' + (p.startDate ? fmtDate(p.startDate) : '?') + ' → ' + (p.deadline ? fmtDate(p.deadline) : '?') + '">' +
+        '</div>';
+    }
+
+    // Task markers
+    var markers = '';
+    tasks.forEach(function(t) {
+      if (!t.dueDate) return;
+      var tp = pct(t.dueDate);
+      if (tp === null) return;
+      var taskDate = new Date(t.dueDate); taskDate.setHours(0, 0, 0, 0);
+      var isOv = t.status !== 'Completed' && taskDate < today;
+      var color;
+      if (t.approvalStatus === 'Approved')        color = '#10b981';
+      else if (isOv)                               color = '#ef4444';
+      else if (t.approvalStatus === 'Pending TL')  color = '#f59e0b';
+      else                                         color = '#6b7280';
+      markers +=
+        '<div class="gantt-task-marker" style="left:' + tp.toFixed(2) + '%;color:' + color + ';" ' +
+        'title="' + escape(t.name) + ' — Due: ' + fmtDate(t.dueDate) +
+          ' | ' + t.status + (t.approvalStatus ? ' / ' + t.approvalStatus : '') + '">' +
+        '◆</div>';
+    });
+
+    trackRows +=
+      '<div class="gantt-track-row">' + barHtml + markers + '</div>';
+  });
+
+  // ── Assemble ──────────────────────────────────────────────────────────────
+  content.innerHTML =
+    '<div class="gantt-outer">' +
+
+      // Legend
+      '<div class="gantt-legend">' +
+        _gLeg_('#3182ce','Project Bar') +
+        _gLeg_('#10b981','Approved Task') +
+        _gLeg_('#f59e0b','Pending Task') +
+        _gLeg_('#ef4444','Overdue Task') +
+        _gLeg_('rgba(220,38,38,.6)','Today') +
+      '</div>' +
+
+      '<div class="gantt-main">' +
+
+        // Left: label column
+        '<div class="gantt-label-col">' +
+          '<div class="gantt-label-header"></div>' +
+          labelRows +
+        '</div>' +
+
+        // Right: scrollable timeline column
+        '<div class="gantt-timeline-col">' +
+          '<div class="gantt-timeline">' +
+            // Today line spans full height of timeline
+            '<div class="gantt-today-line" style="left:' + todayPct.toFixed(2) + '%;" title="Today"></div>' +
+            // Month header
+            '<div class="gantt-month-header">' + monthCells + '</div>' +
+            // Track rows
+            trackRows +
+          '</div>' +
+        '</div>' +
+
+      '</div>' + // .gantt-main
+    '</div>';   // .gantt-outer
+}
+
+function _gLeg_(color, label) {
+  return '<div class="gantt-legend-item">' +
+    '<span class="gantt-legend-dot" style="background:' + color + ';"></span>' +
+    '<span>' + label + '</span>' +
+    '</div>';
+}
+</script>

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(xlsx)",
+      "Skill(xlsx:*)",
+      "Bash(python -c ' *)",
+      "Skill(anthropic-skills:xlsx)",
+      "Skill(anthropic-skills:xlsx:*)",
+      "PowerShell(Rename-Item \"C:\\\\Users\\\\saksh\\\\Desktop\\\\New folder\\\\JS_Project.html\"  \"JS_Projects.html\")",
+      "PowerShell(Rename-Item \"C:\\\\Users\\\\saksh\\\\Desktop\\\\New folder\\\\Css.html\"         \"CSS.html\")",
+      "PowerShell(Rename-Item \"C:\\\\Users\\\\saksh\\\\Desktop\\\\New folder\\\\Js_Utils.html\"    \"JS_Utils.html\")"
+    ]
+  }
+}

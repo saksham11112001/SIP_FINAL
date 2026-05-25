@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>PERT Chart — Secret Ingredient</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #f1f5f9;
+      color: #0f172a;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    .ps-header {
+      background: linear-gradient(135deg, #1e1b4b 0%, #4c1d95 100%);
+      color: #fff;
+      padding: 14px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 16px rgba(0,0,0,.22);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .ps-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .ps-brand-icon {
+      width: 36px;
+      height: 36px;
+      background: rgba(255,255,255,.15);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+    }
+    .ps-brand-name  { font-size: 16px; font-weight: 700; letter-spacing: -.3px; }
+    .ps-brand-sub   { font-size: 11px; color: rgba(255,255,255,.55); margin-top: 1px; }
+    .ps-print-btn {
+      background: rgba(255,255,255,.14);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,.22);
+      padding: 7px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      transition: background .15s;
+    }
+    .ps-print-btn:hover { background: rgba(255,255,255,.24); }
+
+    /* ── Main ── */
+    .ps-main { max-width: 1200px; width: 100%; margin: 0 auto; padding: 32px 24px 48px; flex: 1; }
+
+    /* ── Project card ── */
+    .ps-project-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 28px 32px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 8px rgba(0,0,0,.06);
+    }
+    .ps-project-title-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .ps-project-name {
+      font-size: 24px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -.4px;
+    }
+    .ps-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 12px;
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .ps-status-active    { background: #dcfce7; color: #15803d; }
+    .ps-status-hold      { background: #fef3c7; color: #92400e; }
+    .ps-status-completed { background: #ede9fe; color: #6d28d9; }
+    .ps-meta-row { display: flex; flex-wrap: wrap; gap: 18px; }
+    .ps-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 13px;
+      color: #475569;
+    }
+    .ps-meta-item i { color: #7c3aed; width: 14px; text-align: center; }
+
+    /* ── Content sections ── */
+    .ps-section {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 8px rgba(0,0,0,.06);
+    }
+    .ps-section-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1e293b;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #f1f5f9;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+    .ps-section-title i { color: #7c3aed; }
+    .ps-section-count {
+      font-size: 12px;
+      font-weight: 500;
+      color: #94a3b8;
+      text-transform: none;
+      letter-spacing: 0;
+      margin-left: 2px;
+    }
+
+    /* ── Task table ── */
+    .ps-task-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .ps-task-table th {
+      text-align: left;
+      padding: 8px 12px;
+      background: #f8fafc;
+      border-bottom: 2px solid #e2e8f0;
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .ps-task-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f1f5f9;
+      color: #334155;
+      vertical-align: middle;
+    }
+    .ps-task-table tr:last-child td { border-bottom: none; }
+    .ps-task-table tr:hover td { background: #f8fafc; }
+
+    /* ── Badges ── */
+    .ps-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 9px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .ps-green  { background: #dcfce7; color: #15803d; }
+    .ps-amber  { background: #fef3c7; color: #92400e; }
+    .ps-red    { background: #fee2e2; color: #dc2626; }
+    .ps-blue   { background: #dbeafe; color: #1d4ed8; }
+    .ps-purple { background: #ede9fe; color: #6d28d9; }
+    .ps-gray   { background: #f1f5f9; color: #64748b; }
+
+    /* ── Loading / Error ── */
+    .ps-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 320px;
+      gap: 16px;
+      color: #64748b;
+      font-size: 14px;
+    }
+    .ps-spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid #e2e8f0;
+      border-top-color: #7c3aed;
+      border-radius: 50%;
+      animation: ps-spin .8s linear infinite;
+    }
+    @keyframes ps-spin { to { transform: rotate(360deg); } }
+    .ps-error-icon { font-size: 52px; color: #dc2626; }
+    .ps-error-title { font-size: 20px; font-weight: 700; color: #0f172a; }
+
+    /* ── Footer ── */
+    .ps-footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 11px;
+      color: #94a3b8;
+      background: #f8fafc;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    /* ── Print ── */
+    @media print {
+      .ps-header  { background: #312e81 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .ps-print-btn { display: none !important; }
+      body        { background: #fff; }
+      .ps-section,
+      .ps-project-card { box-shadow: none; border: 1px solid #e2e8f0; break-inside: avoid; }
+    }
+
+    /* ── Mobile ── */
+    @media (max-width: 640px) {
+      .ps-header       { padding: 12px 16px; }
+      .ps-main         { padding: 16px 12px 32px; }
+      .ps-project-card { padding: 20px 16px; }
+      .ps-project-name { font-size: 18px; }
+      .ps-brand-name   { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header class="ps-header">
+  <div class="ps-brand">
+    <div class="ps-brand-icon"><i class="fas fa-chart-gantt"></i></div>
+    <div>
+      <div class="ps-brand-name">Secret Ingredient</div>
+      <div class="ps-brand-sub">Project PERT Chart — View Only</div>
+    </div>
+  </div>
+  <button class="ps-print-btn" onclick="window.print()">
+    <i class="fas fa-print"></i> Print
+  </button>
+</header>
+
+<!-- ── Main content ── -->
+<div class="ps-main">
+
+  <!-- Loading state -->
+  <div class="ps-section ps-state" id="psLoading">
+    <div class="ps-spinner"></div>
+    <div>Loading project data…</div>
+  </div>
+
+  <!-- Error state (hidden until needed) -->
+  <div class="ps-section ps-state" id="psError" style="display:none">
+    <i class="fas fa-circle-exclamation ps-error-icon"></i>
+    <div class="ps-error-title" id="psErrorTitle">Unable to load chart</div>
+    <div id="psErrorMsg" style="text-align:center;max-width:360px;line-height:1.6">Please try refreshing the page.</div>
+  </div>
+
+  <!-- Content (hidden until data loads) -->
+  <div id="psContent" style="display:none">
+
+    <!-- Project card -->
+    <div class="ps-project-card">
+      <div class="ps-project-title-row">
+        <h1 class="ps-project-name" id="psProjectName">—</h1>
+        <span class="ps-status-pill ps-status-active" id="psStatusPill">Active</span>
+      </div>
+      <div class="ps-meta-row" id="psMetaRow"></div>
+    </div>
+
+    <!-- PERT chart section -->
+    <div class="ps-section">
+      <div class="ps-section-title">
+        <i class="fas fa-chart-gantt"></i>
+        PERT Chart — Task Schedule
+      </div>
+      <div id="psPertChart"></div>
+    </div>
+
+    <!-- Task list section -->
+    <div class="ps-section">
+      <div class="ps-section-title">
+        <i class="fas fa-list-check"></i>
+        Task Overview
+        <span class="ps-section-count" id="psTaskCount"></span>
+      </div>
+      <div id="psTaskTable"></div>
+    </div>
+
+  </div><!-- /psContent -->
+</div><!-- /ps-main -->
+
+<!-- ── Footer ── -->
+<footer class="ps-footer">
+  <div>Powered by <strong>Secret Ingredient Project Tracker</strong> &nbsp;·&nbsp; This link gives view-only access to this project's schedule.</div>
+  <div style="margin-top:4px">Generated on <?= Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd MMM yyyy') ?></div>
+</footer>
+
+<script>
+// Token embedded by the server (PertShare.html template variable)
+var PERT_TOKEN = '<?= pertToken ?>';
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function esc(s) {
+  return (s || '').toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Robust date parser — handles Indian locale "DD-MM-YYYY" / "DD/MM/YYYY" / "DD.MM.YYYY"
+// as well as ISO dates, because sheetDisplayValues() returns locale-formatted strings.
+function _parseDate_(s) {
+  if (!s) return null;
+  s = String(s).trim();
+  if (!s) return null;
+  // 1. Standard parse (ISO, long dates, etc.)
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) { d.setHours(0, 0, 0, 0); return d; }
+  // 2. DD/MM/YYYY · DD-MM-YYYY · DD.MM.YYYY
+  var m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (m) {
+    var a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+    if (y < 100) y += 2000;
+    if (a >= 1 && a <= 31 && b >= 1 && b <= 12) {
+      var d1 = new Date(y, b - 1, a);
+      if (!isNaN(d1.getTime())) { d1.setHours(0, 0, 0, 0); return d1; }
+    }
+    if (a >= 1 && a <= 12 && b >= 1 && b <= 31) {
+      var d2 = new Date(y, a - 1, b);
+      if (!isNaN(d2.getTime())) { d2.setHours(0, 0, 0, 0); return d2; }
+    }
+  }
+  // 3. "01 Apr 2026" etc.
+  var d3 = new Date(s.replace(/[\.\-]/g, ' '));
+  if (!isNaN(d3.getTime())) { d3.setHours(0, 0, 0, 0); return d3; }
+  return null;
+}
+
+function _fmtDate_(s) {
+  var d = _parseDate_(s);
+  if (!d) return s || '—';
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var dd = String(d.getDate()).padStart(2, '0');
+  return dd + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+}
+
+// ── PERT chart rendering ─────────────────────────────────────────────────────
+
+var PERT_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function _pertWeeks_(startStr, endStr) {
+  var start = _parseDate_(startStr) || new Date();
+  var end   = _parseDate_(endStr)   || new Date(start.getTime() + 90 * 86400000);
+  // Snap start to Monday of that week
+  var day = start.getDay();
+  start.setDate(start.getDate() - (day === 0 ? 6 : day - 1));
+  start.setHours(0, 0, 0, 0);
+  end.setHours(23, 59, 59, 999);
+  var weeks = [], cur = new Date(start), safetyMax = 200;
+  while (cur <= end && weeks.length < safetyMax) {
+    weeks.push(new Date(cur));
+    cur.setDate(cur.getDate() + 7);
+  }
+  // Always at least 8 weeks
+  while (weeks.length < 8) {
+    var last = weeks.length > 0 ? weeks[weeks.length - 1] : new Date();
+    weeks.push(new Date(last.getTime() + 7 * 86400000));
+  }
+  return weeks;
+}
+
+function _pertTaskWeekIdx_(dateStr, weeks) {
+  if (!dateStr) return -1;
+  var d = _parseDate_(dateStr);
+  if (!d) return -1;
+  d.setHours(12, 0, 0, 0);
+  for (var i = 0; i < weeks.length; i++) {
+    var ws = new Date(weeks[i]); ws.setHours(0, 0, 0, 0);
+    var we = new Date(ws.getTime() + 6 * 86400000); we.setHours(23, 59, 59, 999);
+    if (d >= ws && d <= we) return i;
+  }
+  return -1;
+}
+
+function renderPertChart(project, tasks) {
+  var weeks = _pertWeeks_(project.startDate, project.deadline);
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+
+  // Current week index
+  var todayWeekIdx = -1;
+  for (var wi = 0; wi < weeks.length; wi++) {
+    var ws = weeks[wi];
+    var we = new Date(ws.getTime() + 6 * 86400000); we.setHours(23, 59, 59, 999);
+    if (today >= ws && today <= we) { todayWeekIdx = wi; break; }
+  }
+
+  // Month groups for row 1 header
+  var monthGroups = [], curMonth = -1, curYear = -1, curSpan = 0;
+  for (var wi = 0; wi < weeks.length; wi++) {
+    var m = weeks[wi].getMonth(), y = weeks[wi].getFullYear();
+    if (m !== curMonth || y !== curYear) {
+      if (curSpan > 0) monthGroups.push({ label: PERT_MONTH_NAMES[curMonth] + ' ' + curYear, span: curSpan });
+      curMonth = m; curYear = y; curSpan = 1;
+    } else { curSpan++; }
+  }
+  monthGroups.push({ label: PERT_MONTH_NAMES[curMonth] + ' ' + curYear, span: curSpan });
+
+  var COL_W = 58, LABEL_W = 240;
+  var totalW = LABEL_W + weeks.length * COL_W;
+
+  var h = '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+  h += '<table style="border-collapse:collapse;min-width:' + totalW + 'px;font-size:12px;table-layout:fixed">';
+  h += '<thead>';
+
+  // Row 1: Month headers
+  h += '<tr>';
+  h += '<th style="width:' + LABEL_W + 'px;min-width:' + LABEL_W + 'px;background:#f8fafc;border:1px solid #e2e8f0;padding:6px 10px;text-align:left;font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Task</th>';
+  for (var mg = 0; mg < monthGroups.length; mg++) {
+    var grp = monthGroups[mg];
+    h += '<th colspan="' + grp.span + '" style="background:#f8fafc;border:1px solid #e2e8f0;padding:4px 6px;text-align:center;font-size:11px;font-weight:700;color:#1e293b">' + grp.label + '</th>';
+  }
+  h += '</tr>';
+
+  // Row 2: Week date headers
+  h += '<tr>';
+  h += '<th style="background:#f8fafc;border:1px solid #e2e8f0;padding:4px 8px"></th>';
+  for (var wi = 0; wi < weeks.length; wi++) {
+    var isToday = wi === todayWeekIdx;
+    var dd = weeks[wi];
+    var label = dd.getDate() + '/' + (dd.getMonth() + 1);
+    h += '<th style="width:' + COL_W + 'px;background:' + (isToday ? '#eff6ff' : '#f8fafc') + ';border:1px solid #e2e8f0;padding:3px 2px;text-align:center;font-size:10px;color:' + (isToday ? '#1d4ed8' : '#94a3b8') + ';font-weight:' + (isToday ? '700' : '500') + '">' + label + '</th>';
+  }
+  h += '</tr>';
+  h += '</thead><tbody>';
+
+  if (tasks.length === 0) {
+    h += '<tr><td colspan="' + (weeks.length + 1) + '" style="padding:24px;text-align:center;color:#94a3b8;font-style:italic;border:1px solid #e2e8f0">No tasks found for this project.</td></tr>';
+  }
+
+  for (var ti = 0; ti < tasks.length; ti++) {
+    var t = tasks[ti];
+    var weekIdx     = _pertTaskWeekIdx_(t.dueDate, weeks);
+    var isApproved  = t.status === 'Completed' && t.approvalStatus === 'Approved';
+    var isCompleted = t.status === 'Completed';
+    var isProgress  = t.status === 'In Progress';
+    var dueD        = _parseDate_(t.dueDate);
+    if (dueD) dueD.setHours(0, 0, 0, 0);
+    var isOverdueTask = dueD && dueD < today && !isCompleted;
+
+    var rowBg    = ti % 2 === 0 ? '#ffffff' : '#f8fafc';
+    var nameColor = isApproved ? '#15803d' : isOverdueTask ? '#dc2626' : '#334155';
+    var eName     = esc(t.name);
+    var dueTip    = t.dueDate ? ' | Due: ' + _fmtDate_(t.dueDate) : '';
+
+    h += '<tr style="background:' + rowBg + '">';
+    h += '<td style="border:1px solid #e2e8f0;padding:7px 10px;max-width:' + LABEL_W + 'px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:' + nameColor + ';font-weight:500" title="' + eName + dueTip + '">';
+    if (isApproved)    h += '<i class="fas fa-check-circle" style="color:#15803d;margin-right:5px;font-size:10px"></i>';
+    if (isOverdueTask) h += '<i class="fas fa-triangle-exclamation" style="color:#dc2626;margin-right:5px;font-size:10px"></i>';
+    h += eName + '</td>';
+
+    for (var wi = 0; wi < weeks.length; wi++) {
+      var isTd  = wi === todayWeekIdx;
+      var hasBar = wi === weekIdx;
+      var cellBg = isTd ? 'rgba(219,234,254,.35)' : 'transparent';
+      var barBg  = isApproved ? '#16a34a' : isOverdueTask ? '#dc2626' : isProgress ? '#d97706' : '#6366f1';
+      h += '<td style="border:1px solid #e2e8f0;width:' + COL_W + 'px;text-align:center;padding:4px 3px;background:' + cellBg + '">';
+      if (hasBar) {
+        h += '<div style="height:20px;border-radius:4px;background:' + barBg + ';opacity:.85;display:flex;align-items:center;justify-content:center">';
+        h += '<div style="width:6px;height:6px;border-radius:50%;background:#fff"></div></div>';
+      }
+      h += '</td>';
+    }
+    h += '</tr>';
+  }
+
+  h += '</tbody></table></div>';
+
+  // Legend
+  h += '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;padding:10px 14px;background:#f8fafc;border-radius:8px;font-size:11px;color:#475569">';
+  h += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#16a34a;margin-right:4px;vertical-align:middle"></span>Approved</span>';
+  h += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#d97706;margin-right:4px;vertical-align:middle"></span>In Progress</span>';
+  h += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#dc2626;margin-right:4px;vertical-align:middle"></span>Overdue</span>';
+  h += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#6366f1;margin-right:4px;vertical-align:middle"></span>Not Started</span>';
+  h += '<span style="margin-left:auto"><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:rgba(219,234,254,.7);border:1px solid #bfdbfe;margin-right:4px;vertical-align:middle"></span>Current week</span>';
+  h += '</div>';
+
+  return h;
+}
+
+// ── Task table ───────────────────────────────────────────────────────────────
+
+function renderTaskTable(tasks) {
+  if (!tasks || tasks.length === 0) {
+    return '<p style="text-align:center;color:#94a3b8;padding:24px 0">No tasks in this project.</p>';
+  }
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+
+  var h = '<div style="overflow-x:auto">';
+  h += '<table class="ps-task-table"><thead><tr>';
+  h += '<th style="width:36px">#</th>';
+  h += '<th>Task Name</th>';
+  h += '<th>Assigned To</th>';
+  h += '<th>Due Date</th>';
+  h += '<th>Status</th>';
+  h += '<th>Priority</th>';
+  h += '</tr></thead><tbody>';
+
+  for (var i = 0; i < tasks.length; i++) {
+    var t = tasks[i];
+    var isApproved  = t.status === 'Completed' && t.approvalStatus === 'Approved';
+    var isCompleted = t.status === 'Completed';
+    var dueD        = _parseDate_(t.dueDate);
+    if (dueD) dueD.setHours(0, 0, 0, 0);
+    var isOverdue   = dueD && dueD < today && !isCompleted;
+
+    // Status badge
+    var statusCls, statusLabel;
+    if (isApproved)                      { statusCls = 'ps-green';  statusLabel = 'Approved'; }
+    else if (isCompleted)                { statusCls = 'ps-purple'; statusLabel = 'Pending Review'; }
+    else if (isOverdue)                  { statusCls = 'ps-red';    statusLabel = 'Overdue'; }
+    else if (t.status === 'In Progress') { statusCls = 'ps-amber';  statusLabel = 'In Progress'; }
+    else                                 { statusCls = 'ps-gray';   statusLabel = t.status || 'Not Started'; }
+
+    var priCls = t.priority === 'High' ? 'ps-red' : t.priority === 'Low' ? 'ps-gray' : 'ps-amber';
+
+    h += '<tr>';
+    h += '<td style="color:#94a3b8;font-size:11px">' + (i + 1) + '</td>';
+    h += '<td style="font-weight:500">' + esc(t.name) + '</td>';
+    h += '<td>' + esc(t.assignedTo || '—') + '</td>';
+    h += '<td style="white-space:nowrap">' + _fmtDate_(t.dueDate) + '</td>';
+    h += '<td><span class="ps-badge ' + statusCls + '">' + statusLabel + '</span></td>';
+    h += '<td><span class="ps-badge ' + priCls + '">' + esc(t.priority || '—') + '</span></td>';
+    h += '</tr>';
+  }
+
+  h += '</tbody></table></div>';
+  return h;
+}
+
+// ── Data callbacks ───────────────────────────────────────────────────────────
+
+function onDataLoaded(data) {
+  document.getElementById('psLoading').style.display = 'none';
+
+  if (!data || data.error) {
+    document.getElementById('psError').style.display = 'flex';
+    document.getElementById('psErrorTitle').textContent = 'Unable to load chart';
+    document.getElementById('psErrorMsg').textContent   = (data && data.error) || 'Please try refreshing the page.';
+    return;
+  }
+
+  var project = data.project;
+  var tasks   = data.tasks || [];
+
+  document.title = esc(project.name || 'PERT Chart') + ' — Secret Ingredient';
+  document.getElementById('psContent').style.display = '';
+
+  // Project name
+  document.getElementById('psProjectName').textContent = project.name || 'Unnamed Project';
+
+  // Status pill
+  var pill = document.getElementById('psStatusPill');
+  pill.textContent = project.status || 'Active';
+  pill.className   = 'ps-status-pill';
+  if      (project.status === 'On Hold')   pill.className += ' ps-status-hold';
+  else if (project.status === 'Completed') pill.className += ' ps-status-completed';
+  else                                     pill.className += ' ps-status-active';
+
+  // Meta row
+  var meta = [];
+  if (project.client)    meta.push('<span class="ps-meta-item"><i class="fas fa-briefcase"></i>' + esc(project.client) + '</span>');
+  if (project.startDate) meta.push('<span class="ps-meta-item"><i class="fas fa-calendar-plus"></i>Start: ' + _fmtDate_(project.startDate) + '</span>');
+  if (project.deadline)  meta.push('<span class="ps-meta-item"><i class="fas fa-flag-checkered"></i>Deadline: ' + _fmtDate_(project.deadline) + '</span>');
+  if (project.manager)   meta.push('<span class="ps-meta-item"><i class="fas fa-user-tie"></i>' + esc(project.manager) + '</span>');
+  if (project.teamLead)  meta.push('<span class="ps-meta-item"><i class="fas fa-star"></i>' + esc(project.teamLead) + '</span>');
+  document.getElementById('psMetaRow').innerHTML = meta.join('');
+
+  // PERT chart
+  document.getElementById('psPertChart').innerHTML = renderPertChart(project, tasks);
+
+  // Task count + table
+  document.getElementById('psTaskCount').textContent = '(' + tasks.length + ' task' + (tasks.length !== 1 ? 's' : '') + ')';
+  document.getElementById('psTaskTable').innerHTML = renderTaskTable(tasks);
+}
+
+function onError(e) {
+  document.getElementById('psLoading').style.display = 'none';
+  document.getElementById('psError').style.display   = 'flex';
+  document.getElementById('psErrorMsg').textContent  = (e && e.message) ? e.message : 'An unexpected error occurred. Please refresh the page.';
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+
+window.addEventListener('load', function() {
+  google.script.run
+    .withSuccessHandler(onDataLoaded)
+    .withFailureHandler(onError)
+    .getPertShareData(PERT_TOKEN);
+});
+</script>
+</body>
+</html>

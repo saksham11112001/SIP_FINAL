@@ -1,0 +1,1801 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_Projects.html  |  Projects & Tasks page + Completed Projects page
+//
+//  CHANGES THIS SESSION:
+//    PART 1 – Admin replaces Manager (backward-compat)
+//    PART 2 – Progressive background task loading (no 'Load More' button)
+//             First 50 tasks display immediately; remaining pages fetched in
+//             background with setTimeout between each batch to avoid jank.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Progressive loading state
+var _taskOffset       = 0;
+var _taskLimit        = 50;
+var _taskTotal        = 0;
+var _taskHasMore      = false;
+var _bgLoadInProgress = false;  // prevents concurrent background fetches
+var _bgLoadGen        = 0;      // generation counter — incremented on every loadProjectsPage()
+                                // so any in-flight background batches from a previous load
+                                // know they are stale and must not append to allTasks
+
+// PERT share state — tracks which project the open PERT modal belongs to
+var _pertProjectId_   = null;
+
+// ─── TASK VIEW FILTER (All Tasks / My Tasks) ─────────────────────────────────
+
+var _taskViewFilter = 'my';  // 'all' | 'my'
+
+function setTaskViewFilter(mode) {
+  _taskViewFilter = mode;
+  var btnAll = document.getElementById('btnAllTasks');
+  var btnMy  = document.getElementById('btnMyTasks');
+  if (btnAll) { btnAll.classList.toggle('active', mode === 'all'); btnAll.setAttribute('aria-selected', String(mode === 'all')); }
+  if (btnMy)  { btnMy.classList.toggle('active',  mode === 'my');  btnMy.setAttribute('aria-selected',  String(mode === 'my')); }
+  filterProjects();
+}
+
+// ─── ROLE HELPERS ─────────────────────────────────────────────────────────────
+
+function isManagerOrLeader() {
+  return currentUser.role === 'Admin' || currentUser.role === 'Team Leader';
+}
+
+function isAdmin() {
+  return currentUser.role === 'Admin';
+}
+
+// ─── LOAD ────────────────────────────────────────────────────────────────────
+
+function loadProjectsPage() {
+  var container = document.getElementById('projectsByClient');
+  if (container) container.innerHTML = skeletonCards(3);
+
+  // Increment generation — any background batches still running from a previous
+  // loadProjectsPage call will see their gen !== _bgLoadGen and abort cleanly.
+  _bgLoadGen++;
+  var _thisGen = _bgLoadGen;
+
+  // Reset progressive loading state
+  _taskOffset       = 0;
+  _taskHasMore      = false;
+  _bgLoadInProgress = false;
+
+  Promise.all([
+    runServer('getProjects'),
+    runServer('getTasksPage', [0, _taskLimit]),
+    runServer('getClients'),
+    runServer('getTeams')
+  ]).then(function(results) {
+    allProjects = results[0] || [];
+
+    var pageData = results[1] || {};
+    if (Array.isArray(pageData)) {
+      allTasks     = pageData;
+      _taskTotal   = pageData.length;
+      _taskHasMore = false;
+      _taskOffset  = pageData.length;
+    } else {
+      allTasks     = pageData.tasks   || [];
+      _taskTotal   = pageData.total   || 0;
+      _taskHasMore = pageData.hasMore || false;
+      _taskOffset  = allTasks.length;
+    }
+
+    allClients = results[2] || [];
+    allTeams   = results[3] || [];
+
+    // Render first batch immediately
+    renderProjectsByClient(allProjects, allTasks);
+
+    // Clear any old "load more" button
+    var wrap = document.getElementById('loadMoreWrap');
+    if (wrap) wrap.innerHTML = '';
+
+    // If there are more pages, start background loading automatically.
+    // Pass the current generation so stale batches from old calls self-abort.
+    if (_taskHasMore) {
+      setTimeout(function() { _bgLoadNextTaskBatch_(_thisGen); }, 300);
+    }
+
+  }).catch(function(e) {
+    if (container) container.innerHTML = emptyState('fa-circle-exclamation',
+      'Error loading projects', (e && e.message) || 'Please refresh the page');
+    toast('Error loading projects', 'error');
+  });
+}
+
+// ─── PROGRESSIVE BACKGROUND LOADING ──────────────────────────────────────────
+//
+//  Fetches remaining task pages in the background after the initial render.
+//  Each batch is fetched only after the previous one has rendered, using
+//  a small setTimeout gap to keep the UI thread free between iterations.
+//  No button is shown — loading is entirely invisible to the user.
+
+function _bgLoadNextTaskBatch_(gen) {
+  // Guard 1: stale generation — a newer loadProjectsPage() has started; abort.
+  if (gen !== _bgLoadGen) return;
+  // Guard 2: only one background fetch at a time; stop if no more data.
+  if (_bgLoadInProgress || !_taskHasMore) return;
+  _bgLoadInProgress = true;
+
+  runServer('getTasksPage', [_taskOffset, _taskLimit]).then(function(pageData) {
+    // Guard: check generation again after the async server call returns.
+    // If loadProjectsPage() was called while we were waiting, discard this batch.
+    if (gen !== _bgLoadGen) {
+      _bgLoadInProgress = false;
+      return;
+    }
+
+    _bgLoadInProgress = false;
+    if (!pageData || !pageData.tasks || pageData.tasks.length === 0) {
+      _taskHasMore = false;
+      return;
+    }
+    _taskHasMore  = pageData.hasMore;
+    _taskOffset  += pageData.tasks.length;
+    _taskTotal    = pageData.total || _taskTotal;
+    allTasks      = allTasks.concat(pageData.tasks);
+
+    // Re-render to include newly loaded tasks. Wrapped in setTimeout to
+    // yield to the browser between data fetch and render, preventing jank.
+    setTimeout(function() {
+      if (gen !== _bgLoadGen) return; // stale — skip render too
+      renderProjectsByClient(allProjects, allTasks);
+
+      // Schedule next batch if more remain
+      if (_taskHasMore) {
+        setTimeout(function() { _bgLoadNextTaskBatch_(gen); }, 200);
+      }
+    }, 0);
+
+  }).catch(function() {
+    // Background fetch failed — silently stop. User already has initial batch.
+    _bgLoadInProgress = false;
+    _taskHasMore      = false;
+  });
+}
+
+// Kept for backward-compat (called from nowhere now but safe to leave)
+function updateLoadMoreButton() {
+  var wrap = document.getElementById('loadMoreWrap');
+  if (wrap) wrap.innerHTML = '';
+}
+
+// ─── RENDER: PROJECTS BY CLIENT ───────────────────────────────────────────────
+
+function renderProjectsByClient(projects, tasks) {
+  var container = document.getElementById('projectsByClient');
+  if (!container) return;
+
+  var isAdmin      = currentUser.role === 'Admin';
+  var isTeamLeader = currentUser.role === 'Team Leader';
+  document.getElementById('btnAddProject').style.display = (isAdmin || isTeamLeader) ? '' : 'none';
+
+  if (!projects || projects.length === 0) {
+    container.innerHTML = emptyState('fa-folder-open','No projects found','Add a project to get started');
+    return;
+  }
+
+  // Apply My Tasks filter: show only tasks assigned to current user
+  var filteredTasks = tasks;
+  if (_taskViewFilter === 'my') {
+    var myName  = (currentUser.name  || '').toLowerCase();
+    var myEmail = (currentUser.email || '').toLowerCase();
+    filteredTasks = tasks.filter(function(t) {
+      // Condition 1: task is assigned to me
+      var a = (t.assignedTo || '').toLowerCase();
+      var isAssigned = (a === myName || a === myEmail);
+      // Condition 2: I am the designated approver and the task is waiting for my review
+      var approver = (t.taskApprover || '').trim().toLowerCase();
+      var isPendingMyApproval = approver &&
+        t.approvalStatus === 'Pending TL' &&
+        (approver === myName || approver === myEmail);
+      return isAssigned || isPendingMyApproval;
+    });
+    // Also restrict to projects that have at least one of my tasks
+    var myProjectIds = {};
+    filteredTasks.forEach(function(t) { myProjectIds[t.projectId] = true; });
+    projects = projects.filter(function(p) { return myProjectIds[p.id]; });
+    if (projects.length === 0) {
+      container.innerHTML = emptyState('fa-user-check','No tasks assigned to you or pending your review','Switch to "All Tasks" to see all projects');
+      return;
+    }
+  }
+
+  var byClient = {};
+  var order    = [];
+  for (var i = 0; i < projects.length; i++) {
+    var c = projects[i].client || 'No Client';
+    if (!byClient[c]) { byClient[c] = []; order.push(c); }
+    byClient[c].push(projects[i]);
+  }
+
+  var html = [];
+  for (var ci = 0; ci < order.length; ci++) {
+    html.push(renderClientGroup(order[ci], byClient[order[ci]], filteredTasks, isAdmin));
+  }
+  container.innerHTML = html.join('');
+}
+
+function renderClientGroup(client, projects, tasks, isAdmin) {
+  var totalTasks = 0;
+  for (var i = 0; i < projects.length; i++) {
+    var pid = projects[i].id;
+    for (var j = 0; j < tasks.length; j++) {
+      if (tasks[j].projectId === pid) totalTasks++;
+    }
+  }
+
+  var parts = [
+    '<div class="client-group">',
+    '<div class="client-group-header" onclick="toggleClientGroup(this)">',
+    '<div class="client-header-left">',
+    '<i class="fas fa-chevron-down" style="font-size:12px;transition:transform .2s"></i>',
+    '<span class="client-header-title"><i class="fas fa-briefcase" style="font-size:13px;opacity:.7;margin-right:4px"></i>' + escape(client) + '</span>',
+    '<span class="client-count-pill">' + projects.length + ' project' + (projects.length>1?'s':'') + '</span>',
+    '<span class="client-count-pill" style="background:rgba(255,255,255,.1)">' + totalTasks + ' task' + (totalTasks!==1?'s':'') + '</span>',
+    '</div><i class="fas fa-ellipsis-vertical" style="opacity:.5"></i>',
+    '</div>',
+    '<div class="client-group-body">'
+  ];
+
+  for (var i = 0; i < projects.length; i++) {
+    parts.push(renderProjectGroup(projects[i], tasks, isAdmin));
+  }
+
+  parts.push('</div></div>');
+  return parts.join('');
+}
+
+// Helper: is the current user the project lead for a given projectId?
+function _isProjectLead(projectId) {
+  var myEmail = (currentUser.email || '').trim().toLowerCase();
+  if (!myEmail) return false;
+  for (var i = 0; i < allProjects.length; i++) {
+    if (allProjects[i].id === projectId) {
+      return (allProjects[i].teamLead || '').trim().toLowerCase() === myEmail;
+    }
+  }
+  return false;
+}
+
+// Helper: look up a team member's display name from their email
+function _teamLeadDisplayName(email) {
+  if (!email) return '';
+  var emailLower = email.trim().toLowerCase();
+  for (var i = 0; i < allTeams.length; i++) {
+    if ((allTeams[i].email || '').trim().toLowerCase() === emailLower) {
+      return allTeams[i].name;
+    }
+  }
+  return email;
+}
+
+function renderProjectGroup(p, tasks, isAdmin) {
+  var isProjLead = _isProjectLead(p.id);
+  var pTasks  = [];
+  var done    = 0;
+  var pending = 0;
+  for (var i = 0; i < tasks.length; i++) {
+    if (tasks[i].projectId !== p.id) continue;
+    pTasks.push(tasks[i]);
+    if (tasks[i].status === 'Completed' && tasks[i].approvalStatus === 'Approved') done++;
+    if (tasks[i].approvalStatus === 'Pending TL') pending++;
+  }
+  var total   = pTasks.length;
+  var pct     = total > 0 ? Math.round((done/total)*100) : 0;
+  var progCls = pct >= 80 ? 'prog-green' : pct >= 40 ? 'prog-amber' : 'prog-red';
+  var overdue = p.deadline && daysFromToday(p.deadline) < 0 && p.status !== 'Completed';
+  var onHold  = p.status === 'On Hold';
+
+  var pid         = escape(p.id);
+  var canHold     = isAdmin || isProjLead;  // Admin or this project's lead
+
+  var parts = [
+    '<div class="proj-group' + (onHold ? ' proj-on-hold' : '') + '" id="proj-' + pid + '">',
+
+    // Header
+    '<div class="proj-group-header" onclick="toggleProjGroup(this)">',
+    '<div class="proj-header-left">',
+    '<i class="fas fa-chevron-right" style="font-size:11px;color:var(--text-4);transition:transform .2s;flex-shrink:0"></i>',
+    '<span class="proj-header-title">' + escape(p.name) + '</span>',
+    '<span class="task-pill">' + total + ' task' + (total!==1?'s':'') + '</span>',
+    pending > 0 ? '<span class="ab ab-pending"><i class="fas fa-hourglass-half"></i>' + pending + ' review' + (pending>1?'s':'') + '</span>' : '',
+    onHold      ? '<span class="badge badge-on-hold" style="font-size:10px"><i class="fas fa-pause-circle"></i> On Hold</span>' : '',
+    overdue && !onHold ? '<span class="badge badge-overdue" style="font-size:10px"><i class="fas fa-triangle-exclamation"></i> Overdue</span>' : '',
+    '</div>',
+    '<div class="proj-header-right">',
+    statusBadge(p.status),
+    // Hold / Restart toggle — Manager and Team Leader
+    canHold ? '<button class="act-btn ' + (onHold ? 'act-btn-approve' : 'act-btn-hold') + '" onclick="toggleProjectHold(\'' + pid + '\',\'' + escape(p.name).replace(/'/g,"\\'") + '\',\'' + escape(p.status) + '\');event.stopPropagation()" title="' + (onHold ? 'Restart project' : 'Put on hold') + '"><i class="fas ' + (onHold ? 'fa-play' : 'fa-pause') + '"></i></button>' : '',
+    (isAdmin || isProjLead) ? '<button class="act-btn act-btn-edit" onclick="openProjectModal(\'' + pid + '\');event.stopPropagation()" title="Edit project"><i class="fas fa-pen"></i></button>' : '',
+    (isAdmin || isProjLead) ? '<button class="act-btn" style="background:rgba(109,40,217,.08);color:#6d28d9;border:1px solid rgba(109,40,217,.25)" onclick="openPertModal(\'' + pid + '\');event.stopPropagation()" title="View PERT chart"><i class="fas fa-chart-gantt"></i></button>' : '',
+    isAdmin ? '<button class="act-btn act-btn-delete" onclick="deleteProjectConfirm(\'' + pid + '\',\'' + escape(p.name).replace(/'/g,"\\'") + '\');event.stopPropagation()" title="Delete project"><i class="fas fa-trash"></i></button>' : '',
+    '</div></div>',
+
+    // Meta row
+    '<div class="proj-meta-row">',
+    '<span><i class="fas fa-user-tie"></i>' + escape(p.manager||'—') + '</span>',
+    p.teamLead   ? '<span><i class="fas fa-user-check" style="color:var(--blue)"></i>' + escape(_teamLeadDisplayName(p.teamLead)) + '</span>' : '',
+    p.teamMembers ? '<span><i class="fas fa-users"></i>' + escape(p.teamMembers) + '</span>' : '',
+    '<span><i class="fas fa-calendar-days"></i> Deadline: <strong style="color:' + (overdue&&!onHold?'var(--red)':'var(--text-1)') + '">' + fmtDate(p.deadline) + '</strong></span>',
+    p.startDate ? '<span><i class="fas fa-play-circle"></i> Started: ' + fmtDate(p.startDate) + '</span>' : '',
+    '</div>',
+
+    // Progress bar
+    '<div class="proj-progress-wrap">',
+    '<div class="proj-progress-top"><span>Task Completion</span><span><strong>' + done + '</strong>/' + total + ' approved (' + pct + '%)</span></div>',
+    '<div class="prog-bar"><div class="prog-fill ' + progCls + '" style="width:' + pct + '%"></div></div>',
+    '</div>',
+
+    // Collapsible task list
+    '<div class="collapsible" id="tasks-' + pid + '">'
+  ];
+
+  if (pTasks.length === 0) {
+    parts.push('<div style="padding:14px 16px;color:var(--text-3);font-size:13px;text-align:center;font-style:italic">No tasks yet.</div>');
+  } else {
+    parts.push('<div class="task-list">');
+    for (var ti = 0; ti < pTasks.length; ti++) {
+      parts.push(renderTaskCard(pTasks[ti], isAdmin, onHold));
+    }
+    parts.push('</div>');
+  }
+
+  if (isAdmin || isProjLead) {
+    parts.push(
+      '<div class="task-add-bar" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+      '<button class="btn btn-ghost btn-sm" style="color:var(--blue);border-color:var(--blue);opacity:.85" onclick="openTemplateModal(\'' + pid + '\')">' +
+        '<i class="fas fa-wand-magic-sparkles"></i> Task Templates' +
+      '</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="openTaskModal(null,\'' + pid + '\')"><i class="fas fa-plus"></i> Add Task</button>' +
+      '</div>'
+    );
+  }
+
+  parts.push('</div></div>');
+  return parts.join('');
+}
+
+function renderTaskCard(t, isAdmin, projectOnHold) {
+  var ov      = isOverdue(t.dueDate, t.status);
+  var priCls  = (t.priority||'medium').toLowerCase();
+  var myTask  = currentUser.name === t.assignedTo || currentUser.email === t.assignedTo;
+  var isLead  = _isProjectLead(t.projectId);
+  // Full edit (open modal with all fields): Admin or this project's lead.
+  // Status-only edit (open modal in read-only mode): also the assigned member (myTask).
+  var canEdit = isAdmin || isLead || myTask;
+  var tid     = escape(t.id);
+
+  // Determine who is the effective approver for this task
+  var hasDesignatedApprover = !!(t.taskApprover && t.taskApprover.trim());
+  var isDesignatedApprover  = hasDesignatedApprover && (
+    (currentUser.name  || '').trim().toLowerCase() === t.taskApprover.trim().toLowerCase() ||
+    (currentUser.email || '').trim().toLowerCase() === t.taskApprover.trim().toLowerCase()
+  );
+  // Gavel button: if task has a designated approver → show to that person + Admin
+  //               if no designated approver → show to project lead + Admin
+  var canApproveTL = t.approvalStatus === 'Pending TL' &&
+    (isAdmin || (hasDesignatedApprover ? isDesignatedApprover : isLead));
+
+  var apprLabel = t.approvalStatus;
+  if (apprLabel === 'Pending TL') apprLabel = 'Pending Review';
+
+  var parts = [
+    '<div class="task-card ' + priCls + '">',
+    '<div class="task-card-main">',
+    '<div class="task-card-name' + (ov?' overdue-name':'') + '">',
+    '<span class="priority-dot ' + priCls + '"></span>',
+    escape(t.name),
+    t.approvalStatus ? ' ' + approvalBadge(apprLabel) : '',
+    ov ? ' <span class="badge badge-overdue" style="font-size:10px"><i class="fas fa-triangle-exclamation"></i> Overdue</span>' : '',
+    '</div>',
+    '<div class="task-meta">',
+    '<span><i class="fas fa-user"></i>' + escape(t.assignedTo||'Unassigned') + '</span>',
+    // Show designated approver chip only when it's set (and different info from lead)
+    hasDesignatedApprover
+      ? '<span title="Approver: ' + escape(t.taskApprover) + '"><i class="fas fa-stamp" style="color:var(--purple)"></i> ' + escape(t.taskApprover) + '</span>'
+      : '',
+    t.dueDate ? '<span>' + dueDaysLabel(t.dueDate, t.status) + '</span>' : '',
+    '<span>' + statusBadge(t.status) + '</span>',
+    '<span>' + priorityBadge(t.priority) + '</span>',
+    t.notes ? '<span title="' + escape(t.notes) + '"><i class="fas fa-note-sticky" style="color:var(--amber)"></i></span>' : '',
+    '</div>'
+  ];
+
+  if (t.approvalStatus === 'Rejected' && t.approvalRemarks) {
+    parts.push('<div style="margin-top:6px;font-size:11px;color:var(--red);background:#fef2f2;padding:5px 9px;border-radius:var(--r-sm);border-left:3px solid var(--red)"><i class="fas fa-xmark"></i> <strong>Rejected:</strong> ' + escape(t.approvalRemarks) + '</div>');
+  }
+
+  parts.push('</div><div class="task-card-actions">');
+
+  if (canEdit) {
+    parts.push('<button class="act-btn act-btn-edit" onclick="openTaskModal(\'' + tid + '\')" title="Edit task"><i class="fas fa-pen"></i></button>');
+    // Reassign button — visible to Admin, project lead, or current assignee
+    parts.push('<button class="act-btn act-btn-reassign" onclick="openReassignModal(\'' + tid + '\')" title="Reassign task"><i class="fas fa-user-pen"></i></button>');
+  }
+
+  // Approve / reject button — not shown for On Hold projects
+  if (!projectOnHold && canApproveTL) {
+    var approveTitle = hasDesignatedApprover ? 'Review as designated approver' : 'Lead Review';
+    parts.push('<button class="act-btn act-btn-approve" onclick="openApprovalModal(\'' + tid + '\')" title="' + approveTitle + '"><i class="fas fa-gavel"></i></button>');
+  }
+
+  if (isAdmin) {
+    parts.push('<button class="act-btn act-btn-delete" onclick="deleteTaskConfirm(\'' + tid + '\',\'' + escape(t.name).replace(/'/g,"\\'") + '\')" title="Delete task"><i class="fas fa-trash"></i></button>');
+  }
+
+  parts.push('</div></div>');
+  return parts.join('');
+}
+
+// ─── HOLD / RESTART ──────────────────────────────────────────────────────────
+
+function toggleProjectHold(projectId, projectName, currentStatus) {
+  var isOnHold = currentStatus === 'On Hold';
+  var msg = isOnHold
+    ? 'Restart project "' + projectName + '"? It will be set back to Active.'
+    : 'Put project "' + projectName + '" on hold? Email reminders will be paused for its tasks.';
+  var label = isOnHold ? 'Restart' : 'Hold';
+
+  // Reuse confirmDelete modal with custom message, swapping button label
+  var confirmText = document.getElementById('confirmText');
+  var confirmBtn  = document.getElementById('confirmBtn');
+  if (confirmText) confirmText.textContent = msg;
+  if (confirmBtn) {
+    confirmBtn.innerHTML = '<i class="fas fa-' + (isOnHold ? 'play' : 'pause') + '"></i> ' + label;
+    confirmBtn.className = 'btn ' + (isOnHold ? 'btn-primary' : 'btn-warning');
+    confirmBtn.onclick = function() {
+      closeModal('confirmModal');
+      // Restore delete styling for next use
+      if (confirmBtn) { confirmBtn.className = 'btn btn-danger'; confirmBtn.innerHTML = '<i class="fas fa-trash-can"></i> Delete'; }
+      showLoading(isOnHold ? 'Restarting project…' : 'Putting project on hold…');
+      runServer('toggleProjectHold', [projectId]).then(function(r) {
+        hideLoading();
+        if (r && r.success) {
+          toast(r.newStatus === 'On Hold' ? 'Project put on hold' : 'Project restarted', 'success');
+          _pageLoaded['projects'] = false;
+          loadProjectsPage();
+        } else {
+          toast('Error: ' + (r && r.error || 'Unknown'), 'error');
+        }
+      }).catch(function(e) { hideLoading(); toast('Error: ' + (e && e.message), 'error'); });
+    };
+  }
+  openModal('confirmModal');
+}
+
+// ─── TOGGLE GROUPS ───────────────────────────────────────────────────────────
+
+function toggleClientGroup(header) {
+  var body  = header.nextElementSibling;
+  var arrow = header.querySelector('.fa-chevron-down, .fa-chevron-right');
+  var open  = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  if (arrow) arrow.className = open ? 'fas fa-chevron-right' : 'fas fa-chevron-down';
+}
+
+function toggleProjGroup(header) {
+  var projId   = header.closest('.proj-group').id.replace('proj-','');
+  var collapse = document.getElementById('tasks-' + projId);
+  var arrow    = header.querySelector('.fa-chevron-right, .fa-chevron-down');
+  if (!collapse) return;
+  var isOpen   = collapse.classList.contains('open');
+  collapse.classList.toggle('open');
+  if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(90deg)';
+}
+
+function expandAllGroups() {
+  document.querySelectorAll('.collapsible').forEach(function(c){ c.classList.add('open'); });
+  document.querySelectorAll('.proj-group-header .fa-chevron-right').forEach(function(a){
+    a.style.transform = 'rotate(90deg)';
+  });
+}
+
+// ─── FILTER ──────────────────────────────────────────────────────────────────
+
+function filterProjects() {
+  var q      = (document.getElementById('projSearch').value||'').toLowerCase();
+  var status = document.getElementById('projStatusFilter').value;
+  var ctype  = document.getElementById('projClientTypeFilter').value;
+
+  // ── When a query is active, also search tasks and clients ─────────────────
+  // Any project whose task(s) match is included, and only the matching tasks
+  // are shown inside that project (so the user sees exactly what matched).
+  var searchTasks = allTasks;   // tasks passed to renderer (all or filtered)
+
+  if (q) {
+    // Build set of project IDs that have at least one matching task
+    var taskMatchProjectIds = {};
+    var matchingTasks = allTasks.filter(function(t) {
+      var hit = [t.name, t.assignedTo, t.notes, t.status, t.priority, t.approvalStatus]
+        .some(function(f){ return (f||'').toLowerCase().indexOf(q) !== -1; });
+      if (hit) taskMatchProjectIds[t.projectId] = true;
+      return hit;
+    });
+
+    // Build set of project IDs where client info matches
+    var clientMatchProjectIds = {};
+    allClients.forEach(function(c) {
+      var hit = [c.name, c.type, c.contactPerson, c.contactEmail, c.phone]
+        .some(function(f){ return (f||'').toLowerCase().indexOf(q) !== -1; });
+      if (hit) {
+        // Find all projects for this client
+        allProjects.forEach(function(p) {
+          if ((p.client||'').toLowerCase() === (c.name||'').toLowerCase()) {
+            clientMatchProjectIds[p.id] = true;
+          }
+        });
+      }
+    });
+
+    var filtered = allProjects.filter(function(p) {
+      if (!status && p.status === 'Completed') return false;
+      var matchS  = !status || p.status === status;
+      var matchCT = !ctype  || p.clientType === ctype;
+      if (!matchS || !matchCT) return false;
+
+      // Project-level fields: name, client, manager, teamMembers, teamLead, status
+      var matchProjFields = [p.name, p.client, p.manager, p.teamMembers, p.teamLead, p.status]
+        .some(function(f){ return (f||'').toLowerCase().indexOf(q) !== -1; });
+
+      return matchProjFields || taskMatchProjectIds[p.id] || clientMatchProjectIds[p.id];
+    });
+
+    // When searching, show only matching tasks inside matched projects
+    // (projects matched by project fields still show all their tasks)
+    var projMatchedByField = {};
+    filtered.forEach(function(p) {
+      var matchProjFields = [p.name, p.client, p.manager, p.teamMembers, p.teamLead, p.status]
+        .some(function(f){ return (f||'').toLowerCase().indexOf(q) !== -1; });
+      if (matchProjFields || clientMatchProjectIds[p.id]) projMatchedByField[p.id] = true;
+    });
+
+    searchTasks = allTasks.filter(function(t) {
+      // If the parent project matched by its own fields, show all its tasks
+      if (projMatchedByField[t.projectId]) return true;
+      // Otherwise only show the task if it personally matched
+      return !!taskMatchProjectIds[t.projectId] &&
+        [t.name, t.assignedTo, t.notes, t.status, t.priority, t.approvalStatus]
+          .some(function(f){ return (f||'').toLowerCase().indexOf(q) !== -1; });
+    });
+
+    renderProjectsByClient(filtered, searchTasks);
+
+  } else {
+    // No search query — standard status/type filter only
+    var filtered2 = allProjects.filter(function(p) {
+      if (!status && p.status === 'Completed') return false;
+      var matchS  = !status || p.status === status;
+      var matchCT = !ctype  || p.clientType === ctype;
+      return matchS && matchCT;
+    });
+    renderProjectsByClient(filtered2, allTasks);
+  }
+}
+
+function clearProjectFilters() {
+  document.getElementById('projSearch').value           = '';
+  document.getElementById('projStatusFilter').value     = '';
+  document.getElementById('projClientTypeFilter').value = '';
+  filterProjects();
+}
+
+// ─── PROJECT MODAL ───────────────────────────────────────────────────────────
+
+var _initTaskCounter = 0;
+
+function addInitialTaskRow() {
+  var list = document.getElementById('initialTasksList');
+  if (!list) return;
+  var idx = _initTaskCounter++;
+  var row = document.createElement('div');
+  row.id = 'itrow_' + idx;
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:start';
+  // Default due date = today + 7 days
+  var defaultDue = _defaultDueDate();
+  row.innerHTML =
+    '<input type="text" placeholder="Task name *" class="it-name" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:13px;width:100%">' +
+    '<select class="it-assignee" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:13px;width:100%">' +
+      buildTeamOptions() +
+    '</select>' +
+    '<input type="date" class="it-due" value="' + defaultDue + '" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:13px;width:100%">' +
+    '<button type="button" onclick="removeInitialTaskRow(\'itrow_' + idx + '\')" style="padding:7px 10px;background:var(--red);color:#fff;border:none;border-radius:var(--r-sm);cursor:pointer;font-size:12px"><i class="fas fa-times"></i></button>';
+  list.appendChild(row);
+}
+
+// Returns today + 7 days formatted as yyyy-MM-dd for <input type="date">
+function _defaultDueDate() {
+  var d = new Date();
+  d.setDate(d.getDate() + 7);
+  var mm = ('0' + (d.getMonth()+1)).slice(-2);
+  var dd = ('0' + d.getDate()).slice(-2);
+  return d.getFullYear() + '-' + mm + '-' + dd;
+}
+
+function buildTeamOptions() {
+  var opts = '<option value="">Unassigned</option>';
+  for (var i = 0; i < allTeams.length; i++) {
+    opts += '<option value="' + escape(allTeams[i].name) + '">' + escape(allTeams[i].name) + '</option>';
+  }
+  return opts;
+}
+
+function removeInitialTaskRow(rowId) {
+  var el = document.getElementById(rowId);
+  if (el) el.parentNode.removeChild(el);
+}
+
+function clearInitialTasks() {
+  var list = document.getElementById('initialTasksList');
+  if (list) list.innerHTML = '';
+  _initTaskCounter = 0;
+}
+
+function getInitialTasks() {
+  var rows  = document.querySelectorAll('#initialTasksList > div');
+  var tasks = [];
+  for (var i = 0; i < rows.length; i++) {
+    var name = rows[i].querySelector('.it-name').value.trim();
+    if (!name) continue;
+    tasks.push({
+      name      : name,
+      assignedTo: rows[i].querySelector('.it-assignee').value,
+      dueDate   : rows[i].querySelector('.it-due').value,
+      priority  : 'Medium',
+      notes     : rows[i].getAttribute('data-notes') || ''
+    });
+  }
+  return tasks;
+}
+
+
+// ─── TASK TEMPLATES ──────────────────────────────────────────────────────────
+
+// ─── TASK TEMPLATES — sourced from SI Project Workflow document ──────────────
+var TASK_TEMPLATES = {
+  kickoff: [
+    { name: 'Introductory email to client — share team names & contacts', notes: '' },
+    { name: 'Create internal WhatsApp group', notes: '' },
+    { name: 'Create client WhatsApp group (Secret x Project Name)', notes: '' },
+    { name: 'Kick off meeting with client', notes: '' },
+    { name: 'Fill concept brief form', notes: 'Combination of client brief and Sid/Kula brief' },
+    { name: 'Fix weekly calls with client', notes: '' },
+    { name: 'Make PERT chart', notes: '' },
+    { name: 'Share PERT with client', notes: '' },
+    { name: 'Conduct internal site and online research', notes: 'Visit site and surrounding area' },
+    { name: 'Create PPT for research and concept note', notes: 'Refer to previous research from team for format' },
+    { name: 'Schedule meeting with client to review concept', notes: 'Share over email post meeting' },
+    { name: 'Make indicative budget and forecast', notes: 'Schedule meeting; share over email post meeting' },
+    { name: 'Share test kitchen and recruitment email', notes: 'Ensure client acknowledges receipt' }
+  ],
+  location: [
+    { name: 'Find appropriate location through realtors', notes: '' },
+    { name: 'Schedule site visits for client', notes: '' },
+    { name: 'Check site feasibility via checklist', notes: '' },
+    { name: 'Sign lease agreement with landlord', notes: '' }
+  ],
+  interior: [
+    { name: 'Recommend architects — share company profile & proposal', notes: '' },
+    { name: 'Schedule meeting with client and architect', notes: 'Explain concept' },
+    { name: 'Create architect WhatsApp group', notes: '' },
+    { name: 'Share concept note & brief with architect', notes: '' },
+    { name: 'Get initial mood board & presentation from architect', notes: 'Back and forth expected' },
+    { name: 'Architect to proceed with layouts and 3Ds', notes: '' },
+    { name: 'Check interior checklist — restaurant layout sign-off', notes: 'No changes possible after this stage' },
+    { name: 'Recommend and onboard PMC (optional)', notes: '' },
+    { name: 'Review BOQ from architect', notes: '' },
+    { name: 'Share BOQ with contractors for comparative pricing', notes: '' },
+    { name: 'Schedule contractor meeting — discuss BOQ and negotiate', notes: '' },
+    { name: 'Close contractor & PMC — ensure contracts signed', notes: '' },
+    { name: 'Create construction WhatsApp group', notes: 'PMC, contractor, architect, client, SI, kitchen vendor, HVAC, bar vendor' },
+    { name: 'Get civil layout & drawings from architect', notes: 'Refer to interior checklist' },
+    { name: 'Close HVAC vendor', notes: '' },
+    { name: 'Close Sound vendor', notes: '' },
+    { name: 'Firefighting quote', notes: '' },
+    { name: 'Material sampling — tiles, veneer, flooring, marble', notes: 'Architect shares post client approval; contractor sources' },
+    { name: 'Schedule biweekly site meetings with all vendors', notes: 'Ensure client visits site a few times a week' },
+    { name: 'Identify CCTV vendor', notes: '' },
+    { name: 'Get camera placement layout from architect', notes: '' },
+    { name: 'Get Wi-Fi & internet connection', notes: '' }
+  ],
+  furniture: [
+    { name: 'Get furniture docket', notes: '' },
+    { name: 'Review furniture docket with client', notes: 'Get alternate options if required' },
+    { name: 'Get furniture quotes and timelines from 3 vendors', notes: '' },
+    { name: 'Schedule vendor and client meeting', notes: 'Client to see existing vendor work' },
+    { name: 'Get PPT with furniture dimensions from architect', notes: '' },
+    { name: 'Begin furniture sampling', notes: '' },
+    { name: 'Close material — marble, fabric, wood quality/finish', notes: '' },
+    { name: 'Get lighting docket', notes: '' },
+    { name: 'Get lighting quotes from vendors', notes: '' },
+    { name: 'Close and place furniture & lighting order', notes: 'Lead time: 45-60 days minimum. Align delivery with launch date' }
+  ],
+  sound: [
+    { name: 'Recommend sound vendor', notes: '' },
+    { name: 'Give concept brief to sound vendor', notes: '' },
+    { name: 'Share restaurant layout with sound vendor', notes: '' },
+    { name: 'Get 3 sound quotations', notes: '' },
+    { name: 'Recommend acoustic consultant if required', notes: '' },
+    { name: 'Get acoustic consultant quotation', notes: '' },
+    { name: 'Receive sound drawings', notes: 'Note: sound and wiring is part of initial civil work — must happen simultaneously' }
+  ],
+  kitchen: [
+    { name: 'Identify and onboard kitchen vendor', notes: '' },
+    { name: 'Share onboarding email with kitchen vendor', notes: '' },
+    { name: 'Schedule site visit for kitchen vendor', notes: '' },
+    { name: 'Give concept brief to kitchen vendor', notes: '' },
+    { name: 'Identify kitchen space requirements — share 3Ds and CAD file', notes: '' },
+    { name: 'Close kitchen layout', notes: 'Include geyser, dustbin, janitor closet etc. Refer to kitchen checklist' },
+    { name: 'Get MEP drawings (mechanical, electrical, plumbing)', notes: 'Share with contractor' },
+    { name: 'Kitchen vendor site visits — check floor elevation, drainage, electrical, ducting', notes: 'Frequent visits compulsory' },
+    { name: 'Get kitchen BOQ', notes: 'Equipment delivery: 45-60 days. Process payments accordingly' },
+    { name: 'Thorough BOQ review — brands, pricing, negotiate', notes: 'Get comparative quote if required' },
+    { name: 'Close kitchen ducting & HVAC vendor', notes: '' },
+    { name: 'Close RO vendor and RO size', notes: '' },
+    { name: 'Obtain gas connection, pipeline, leakage detector and gas certificate', notes: '' }
+  ],
+  bar: [
+    { name: 'Identify bar vendor', notes: '' },
+    { name: 'Identify bar space', notes: '' },
+    { name: 'Process bar vendor advance', notes: '' },
+    { name: 'Close bar layouts & drawings', notes: 'Refer to checklist' },
+    { name: 'Approve bar BOQ', notes: '' },
+    { name: 'Create physical stencil for bar', notes: '' },
+    { name: 'Select color and logo engraving for drip tray', notes: 'Procurement timeline: 6-8 weeks' }
+  ],
+  licenses: [
+    { name: 'Identify licensing agent', notes: 'Finding a trustworthy agent is extremely important' },
+    { name: 'Get list of licenses, fee breakup and timelines from 3 agents', notes: '' },
+    { name: 'Schedule meeting with client and licensing agent', notes: '' },
+    { name: 'Share all required documents with licensing agent', notes: '' },
+    { name: 'Align all inspections as per restaurant readiness', notes: 'Refer to checklist' }
+  ],
+  branding: [
+    { name: 'Recommend 3 branding agencies with profiles', notes: '' },
+    { name: 'Get proposals from all three agencies', notes: '' },
+    { name: 'Schedule initial meeting — brand identity and concept brief', notes: '' },
+    { name: 'Create branding WhatsApp group', notes: '' },
+    { name: 'Get initial mood board from designer', notes: '' },
+    { name: 'Finalise brand name if required', notes: '' },
+    { name: 'Apply for trademark', notes: 'Through intellectual property person/CA' },
+    { name: 'Buy domain name for website', notes: '' },
+    { name: 'Finalize logo', notes: '' },
+    { name: 'Close collaterals — coasters, letterhead, visiting cards, napkin, uniform, menus', notes: 'Refer to branding checklist' },
+    { name: 'Begin sampling for main collaterals', notes: 'Menu folder, coasters, butter paper, chopstick sleeves, bill presenter' },
+    { name: 'Uniform sampling for all designations and place order', notes: 'Order well in time' },
+    { name: 'Get client approval and place collateral order', notes: '' },
+    { name: 'Get F&B menu printed', notes: 'Thorough proof reading by more than one person before printing. Refer to menu checklist' },
+    { name: 'Source packaging and disposables', notes: 'Pizza box, coffee cups, stickers, sleeves — custom or standard per brand type' },
+    { name: 'Get website designed', notes: '45 days before launch — optional but very important' }
+  ],
+  hiring: [
+    { name: 'Recommend HR companies', notes: '' },
+    { name: 'Float requirements for managerial positions', notes: 'Head chef, restaurant manager, mixologist — via recruitment enquiry form' },
+    { name: 'Discuss benefit plan with client', notes: 'ESI, PF and other benefits' },
+    { name: 'Conduct interviews and trials', notes: '' },
+    { name: 'Share shortlisted CVs with client', notes: 'Include resume and interview form over email' },
+    { name: 'Conduct internal interviews — final round with client', notes: '' },
+    { name: 'Conduct trade tests — head chef and mixologist', notes: '' },
+    { name: 'Create trial menu to assess chef skills', notes: 'Include dishes that will be on the menu' },
+    { name: 'Block kitchen before trial — share calendar invites', notes: 'Share ingredient lists minimum 48 hours prior' },
+    { name: 'Document trial dish photographs', notes: 'For client documentation' },
+    { name: 'Share offer letter for selected candidate', notes: 'Get signed offer letter and accepted resignation letter from previous org' },
+    { name: 'Collect staff documentation', notes: '10th/12th marksheet, graduation, Aadhar, PAN, cancelled cheque, police verification, medical certificate' }
+  ],
+  food: [
+    { name: 'Create master bar and food menu', notes: '' },
+    { name: 'Create visual deck & theatrics document', notes: '' },
+    { name: 'Explain and share master menus and deck with client', notes: '' },
+    { name: 'Conduct food trials with onboarded team', notes: 'Focus on taste first, then presentation' },
+    { name: 'Document recipes with kitchen team', notes: 'Assisted and reviewed by SI' },
+    { name: 'Calculate food cost', notes: 'Assisted and reviewed by SI' },
+    { name: 'Share suggested pricing after market research', notes: 'Compare with competing restaurants' },
+    { name: 'Close brand for coffee and tea', notes: '' },
+    { name: 'Order small equipment for kitchen and bar', notes: 'Order well in time to avoid last-minute hiccups' },
+    { name: 'Coffee machine recommendation and ordering', notes: 'Consult Bharat from Bili Hu if in doubt' }
+  ],
+  ccg: [
+    { name: 'Create CCG mood board in line with the menu', notes: '' },
+    { name: 'Discuss CCG mood board with client', notes: '' },
+    { name: 'CCG sampling', notes: '' },
+    { name: 'Approve BOQ internally, then share with client', notes: '' },
+    { name: 'Ensure all CCG payments are made on time', notes: '' },
+    { name: 'Thoroughly check all crockery on receiving', notes: '' }
+  ],
+  tablesetting: [
+    { name: 'Create table setting deck', notes: 'Table mats, condiment trays, oil pourers, table centrepiece, cruet sets, chopstick sleeves, cutlery rest' },
+    { name: 'Do sampling for table setting items', notes: '' },
+    { name: 'Place table setting order', notes: '' }
+  ],
+  pos: [
+    { name: 'Procure hardware — laptop, tabs, printers, mobiles', notes: '' },
+    { name: 'Finalise POS procedures and training', notes: '' },
+    { name: 'Menu uploading in order taking devices / point of sale', notes: '' },
+    { name: 'Integration between order taking devices and POS', notes: '' },
+    { name: 'KOT printer & bill printer test run', notes: '' },
+    { name: 'Set up tax structure and service charge', notes: 'As per local jurisdiction and management decision' },
+    { name: 'Bill printing with brand logo, address, GST & FSSAI number', notes: '' },
+    { name: 'Procure EDC machines from bank', notes: '' },
+    { name: 'Integrate feedback form/system', notes: '' }
+  ],
+  socialmedia: [
+    { name: 'Share SM & PR agencies with profile and proposal', notes: '' },
+    { name: 'Schedule meetings with shortlisted agency', notes: '' },
+    { name: 'Create group with client, agency and SI', notes: 'For everyday communication' },
+    { name: 'Create Instagram & Facebook page', notes: '' },
+    { name: 'Review launch strategy', notes: '' }
+  ],
+  preopening: [
+    { name: 'Final kitchen trials — plating and presentation in main kitchen', notes: 'Kitchen to be ready before launch' },
+    { name: 'Pest control contract', notes: '' },
+    { name: 'Uniform cleaning and linen laundry contract', notes: '' },
+    { name: 'Photography and videography for F&B space', notes: '' },
+    { name: 'Finalise FOH & BOH staff — purchase manager, cashier', notes: '' },
+    { name: 'Define SOPs and train staff', notes: '' },
+    { name: 'Service tasting — menus, service, FAQs, guest interaction', notes: '' },
+    { name: 'Setup supply chain — procurement & purchasing', notes: '' },
+    { name: 'Establish market list and suppliers for all products', notes: '' },
+    { name: 'Finalise music system contract', notes: '' },
+    { name: 'Establish regular meeting and daily briefing schedule', notes: '' },
+    { name: 'Establish duty roster and work schedule', notes: '' },
+    { name: 'Establish daily delivery schedule', notes: 'Ingredients, flowers, restaurant items' },
+    { name: 'Establish all working forms', notes: 'P&L, wastage sheet, inventory, temperature log, receiving sheets, leave form' },
+    { name: 'Biometrics for staff check in/check out', notes: '' },
+    { name: 'Get name tags for the team', notes: '' },
+    { name: 'Procure signages — GST, staff only, House Rules, No Smoking, Fire Exit', notes: '' },
+    { name: 'Reservation tags for tables', notes: '' },
+    { name: 'Propose operating hours', notes: '' },
+    { name: 'Assign table numbers according to layout', notes: '' },
+    { name: 'Purchase cell phone number for RM & GRE', notes: '' },
+    { name: 'First Aid Box (restaurant & kitchen)', notes: '' },
+    { name: 'Prepare snag list for handover', notes: '' },
+    { name: 'Swiggy/Zomato onboarding', notes: '' },
+    { name: 'Google listing and map locations', notes: '' }
+  ]
+};
+
+function applyTaskTemplate(templateKey) {
+  if (!templateKey) return;
+  var tasks = TASK_TEMPLATES[templateKey];
+  if (!tasks) return;
+  var list = document.getElementById('initialTasksList');
+  if (!list) return;
+
+  var defaultDue = _defaultDueDate();
+
+  for (var i = 0; i < tasks.length; i++) {
+    var idx = _initTaskCounter++;
+    var row = document.createElement('div');
+    row.id = 'itrow_' + idx;
+    row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:start';
+    row.innerHTML =
+      '<input type="text" placeholder="Task name *" class="it-name" value="' + escape(tasks[i].name) + '" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:13px;width:100%">' +
+      '<select class="it-assignee" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:13px;width:100%">' +
+        buildTeamOptions() +
+      '</select>' +
+      '<input type="date" class="it-due" value="' + defaultDue + '" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:13px;width:100%">' +
+      '<button type="button" onclick="removeInitialTaskRow(\'itrow_' + idx + '\')" style="padding:7px 10px;background:var(--red);color:#fff;border:none;border-radius:var(--r-sm);cursor:pointer;font-size:12px"><i class="fas fa-times"></i></button>';
+    row.setAttribute('data-notes', tasks[i].notes || '');
+    list.appendChild(row);
+  }
+}
+
+// ─── TEMPLATE PICKER MODAL (existing projects) ───────────────────────────────
+
+var _tpCurrentCategory = 'kickoff';
+
+var TP_CATEGORY_META = {
+  kickoff      : { label: 'Kickoff',       icon: 'fa-rocket',            color: '#6d28d9', bg: '#f5f3ff', border: '#ddd6fe' },
+  location     : { label: 'Location',      icon: 'fa-map-location-dot',  color: '#0369a1', bg: '#f0f9ff', border: '#bae6fd' },
+  interior     : { label: 'Interior',      icon: 'fa-drafting-compass',  color: '#92400e', bg: '#fef3c7', border: '#fde68a' },
+  furniture    : { label: 'Furniture',     icon: 'fa-couch',             color: '#b45309', bg: '#fffbeb', border: '#fde68a' },
+  sound        : { label: 'Sound',         icon: 'fa-music',             color: '#7c3aed', bg: '#f5f3ff', border: '#c4b5fd' },
+  kitchen      : { label: 'Kitchen',       icon: 'fa-utensils',          color: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
+  bar          : { label: 'Bar',           icon: 'fa-martini-glass',     color: '#be185d', bg: '#fdf2f8', border: '#fbcfe8' },
+  licenses     : { label: 'Licenses',      icon: 'fa-file-contract',     color: '#4338ca', bg: '#eef2ff', border: '#c7d2fe' },
+  branding     : { label: 'Branding',      icon: 'fa-palette',           color: '#0891b2', bg: '#ecfeff', border: '#a5f3fc' },
+  hiring       : { label: 'Hiring',        icon: 'fa-users',             color: '#15803d', bg: '#f0fdf4', border: '#bbf7d0' },
+  food         : { label: 'Food & Bar',    icon: 'fa-bowl-food',         color: '#c2410c', bg: '#fff7ed', border: '#fed7aa' },
+  ccg          : { label: 'CCG',           icon: 'fa-wine-glass',        color: '#7e22ce', bg: '#faf5ff', border: '#e9d5ff' },
+  tablesetting : { label: 'Table Setting', icon: 'fa-table-cells',       color: '#0f766e', bg: '#f0fdfa', border: '#99f6e4' },
+  pos          : { label: 'POS',           icon: 'fa-cash-register',     color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
+  socialmedia  : { label: 'Social & PR',   icon: 'fa-hashtag',           color: '#e11d48', bg: '#fff1f2', border: '#fecdd3' },
+  preopening   : { label: 'Pre-Opening',   icon: 'fa-flag-checkered',    color: '#374151', bg: '#f9fafb', border: '#d1d5db' }
+};
+
+function openTemplateModal(projectId) {
+  document.getElementById('tpProjectId').value = projectId;
+  _tpCurrentCategory = 'kickoff';
+  _renderTpCategories();
+  _renderTpTasks();
+  openModal('templatePickerModal');
+}
+
+function _renderTpCategories() {
+  var wrap = document.getElementById('tpCategoryBtns');
+  if (!wrap) return;
+  var html = '';
+  Object.keys(TP_CATEGORY_META).forEach(function(key) {
+    var m       = TP_CATEGORY_META[key];
+    var active  = key === _tpCurrentCategory;
+    var bg      = active ? m.color : m.bg;
+    var color   = active ? '#fff'  : m.color;
+    var border  = active ? m.color : m.border;
+    var weight  = active ? '700'   : '600';
+    html +=
+      '<button type="button" onclick="tpSwitchCategory(\'' + key + '\')" ' +
+      'style="display:inline-flex;align-items:center;gap:5px;padding:6px 14px;' +
+      'border:1.5px solid ' + border + ';background:' + bg + ';color:' + color + ';' +
+      'border-radius:99px;font-size:12px;font-weight:' + weight + ';cursor:pointer;transition:all .15s">' +
+      '<i class="fas ' + m.icon + '" style="font-size:11px"></i> ' + m.label +
+      '</button>';
+  });
+  wrap.innerHTML = html;
+}
+
+function tpSwitchCategory(key) {
+  _tpCurrentCategory = key;
+  _renderTpCategories();
+  _renderTpTasks();
+}
+
+function _renderTpTasks() {
+  var list  = document.getElementById('tpTaskList');
+  if (!list) return;
+  var tasks = TASK_TEMPLATES[_tpCurrentCategory] || [];
+  var m     = TP_CATEGORY_META[_tpCurrentCategory];
+  var defaultDue = _defaultDueDate();
+
+  var html = '<div style="border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden">';
+
+  html += '<div style="display:grid;grid-template-columns:32px 1fr 140px 130px;gap:0;' +
+          'background:var(--surface-2);padding:8px 12px;font-size:11px;font-weight:700;' +
+          'color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">' +
+          '<div></div><div>Task</div><div>Assign To</div><div>Due Date</div></div>';
+
+  for (var i = 0; i < tasks.length; i++) {
+    var t   = tasks[i];
+    var idx = 'tp_' + _tpCurrentCategory + '_' + i;
+    var bg  = i % 2 === 0 ? 'var(--surface)' : 'var(--surface-2)';
+    html += '<div style="display:grid;grid-template-columns:32px 1fr 140px 130px;gap:0;align-items:center;' +
+            'padding:10px 12px;background:' + bg + ';border-bottom:1px solid var(--border)">';
+
+    html += '<div><input type="checkbox" id="' + idx + '" class="tp-check" data-cat="' + _tpCurrentCategory + '" data-idx="' + i + '" ' +
+            'onchange="_tpUpdateCount()" style="width:15px;height:15px;cursor:pointer;accent-color:' + m.color + '"></div>';
+
+    html += '<div style="padding-right:12px">' +
+            '<div style="font-size:13px;font-weight:600;color:var(--text-1)">' + escape(t.name) + '</div>' +
+            (t.notes ? '<div style="font-size:11px;color:var(--text-3);margin-top:2px;line-height:1.4">' + escape(t.notes) + '</div>' : '') +
+            '</div>';
+
+    html += '<div style="padding-right:8px"><select id="' + idx + '_assignee" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12px;background:var(--surface)">' +
+            buildTeamOptions() + '</select></div>';
+
+    // Default due date pre-filled
+    html += '<div><input type="date" id="' + idx + '_due" value="' + defaultDue + '" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12px;background:var(--surface)"></div>';
+
+    html += '</div>';
+  }
+
+  html += '</div>';
+
+  html = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+         '<input type="checkbox" id="tpSelectAll" onchange="_tpToggleAll(this.checked)" style="width:15px;height:15px;cursor:pointer;accent-color:' + m.color + '">' +
+         '<label for="tpSelectAll" style="font-size:12px;color:var(--text-2);cursor:pointer;font-weight:600">Select all ' + tasks.length + ' tasks</label>' +
+         '</div>' + html;
+
+  list.innerHTML = html;
+  _tpUpdateCount();
+}
+
+function _tpToggleAll(checked) {
+  document.querySelectorAll('#tpTaskList .tp-check').forEach(function(cb) { cb.checked = checked; });
+  _tpUpdateCount();
+}
+
+function _tpUpdateCount() {
+  var count = document.querySelectorAll('#tpTaskList .tp-check:checked').length;
+  var el    = document.getElementById('tpSelCount');
+  if (el) el.textContent = count + ' task' + (count !== 1 ? 's' : '') + ' selected';
+}
+
+function submitTemplateSelection() {
+  var projectId = document.getElementById('tpProjectId').value;
+  var checked   = document.querySelectorAll('#tpTaskList .tp-check:checked');
+
+  if (checked.length === 0) {
+    toast('Please select at least one task.', 'warning');
+    return;
+  }
+
+  var taskList = [];
+  checked.forEach(function(cb) {
+    var cat  = cb.getAttribute('data-cat');
+    var idx  = parseInt(cb.getAttribute('data-idx'), 10);
+    var t    = TASK_TEMPLATES[cat][idx];
+    var id   = 'tp_' + cat + '_' + idx;
+    taskList.push({
+      name      : t.name,
+      assignedTo: document.getElementById(id + '_assignee').value || '',
+      dueDate   : document.getElementById(id + '_due').value       || '',
+      priority  : 'Medium',
+      notes     : t.notes || ''
+    });
+  });
+
+  closeModal('templatePickerModal');
+  showLoading('Adding ' + taskList.length + ' task' + (taskList.length !== 1 ? 's' : '') + '…');
+
+  runServer('addTasksBulk', [projectId, taskList]).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      toast(taskList.length + ' task' + (taskList.length !== 1 ? 's' : '') + ' added successfully', 'success');
+      _pageLoaded['projects'] = false;
+      loadProjectsPage();
+    } else {
+      toast('Error: ' + (r && r.error || 'Unknown'), 'error');
+    }
+  }).catch(function(e) { hideLoading(); toast('Error: ' + (e && e.message), 'error'); });
+}
+
+// ─── PERT CHART ──────────────────────────────────────────────────────────────
+
+function openPertModal(projectId) {
+  var project = null;
+  for (var i = 0; i < allProjects.length; i++) {
+    if (allProjects[i].id === projectId) { project = allProjects[i]; break; }
+  }
+  if (!project) { toast('Project not found.', 'error'); return; }
+
+  // Track current project for share button
+  _pertProjectId_ = projectId;
+
+  var pTasks = allTasks.filter(function(t) { return t.projectId === projectId; });
+
+  document.getElementById('pertModalTitle').textContent = project.name + ' — PERT Chart';
+  document.getElementById('pertContent').innerHTML = renderPertChart(project, pTasks);
+
+  // Show share button only to Admin and Team Leader
+  var shareBtn = document.getElementById('pertShareBtn');
+  if (shareBtn) {
+    var canShare = currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Team Leader');
+    shareBtn.style.display = canShare ? '' : 'none';
+  }
+
+  openModal('pertModal');
+}
+
+function sharePertChart() {
+  if (!_pertProjectId_) { toast('No project selected', 'error'); return; }
+  showLoading('Generating share link…');
+  runServer('generatePertLink', [_pertProjectId_]).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      // Try clipboard API first; fall back to prompt so the user can copy manually
+      var doCopy = function(url) {
+        try {
+          navigator.clipboard.writeText(url).then(function() {
+            toast('Share link copied to clipboard!', 'success');
+          }).catch(function() {
+            window.prompt('Copy this link to share the PERT chart:', url);
+          });
+        } catch (e) {
+          window.prompt('Copy this link to share the PERT chart:', url);
+        }
+      };
+      doCopy(r.url);
+    } else {
+      toast('Error: ' + (r && r.error || 'Unknown error'), 'error');
+    }
+  }).catch(function(e) {
+    hideLoading();
+    toast('Error: ' + (e && e.message || 'Unknown error'), 'error');
+  });
+}
+
+function _pertWeeks_(startStr, endStr) {
+  // _parseDate_() is defined in JS_Utils.html (loaded first) and handles
+  // locale date strings like "01/04/2026" (DD/MM/YYYY India) correctly.
+  var start = _parseDate_(startStr) || new Date();
+  var end   = _parseDate_(endStr)   || new Date(start.getTime() + 90 * 86400000);
+  // Snap start to Monday of that week
+  var day = start.getDay(); // 0=Sun
+  start.setDate(start.getDate() - (day === 0 ? 6 : day - 1));
+  start.setHours(0, 0, 0, 0);
+  end.setHours(23, 59, 59, 999);
+  var weeks = [];
+  var cur = new Date(start);
+  var safetyMax = 200; // never loop forever
+  while (cur <= end && weeks.length < safetyMax) {
+    weeks.push(new Date(cur));
+    cur.setDate(cur.getDate() + 7);
+  }
+  // Always show at least 8 weeks
+  while (weeks.length < 8) {
+    var last = weeks.length > 0 ? weeks[weeks.length - 1] : new Date();
+    var next = new Date(last.getTime() + 7 * 86400000);
+    weeks.push(next);
+  }
+  return weeks;
+}
+
+function _pertTaskWeekIdx_(dateStr, weeks) {
+  if (!dateStr) return -1;
+  var d = _parseDate_(dateStr);
+  if (!d) return -1;
+  d.setHours(12, 0, 0, 0);
+  for (var i = 0; i < weeks.length; i++) {
+    var ws = new Date(weeks[i]); ws.setHours(0, 0, 0, 0);
+    var we = new Date(ws.getTime() + 6 * 86400000); we.setHours(23, 59, 59, 999);
+    if (d >= ws && d <= we) return i;
+  }
+  return -1;
+}
+
+var PERT_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function renderPertChart(project, tasks) {
+  var weeks = _pertWeeks_(project.startDate, project.deadline);
+  var today = new Date(); today.setHours(0,0,0,0);
+
+  // Find current week index
+  var todayWeekIdx = -1;
+  for (var wi = 0; wi < weeks.length; wi++) {
+    var ws = weeks[wi]; var we = new Date(ws.getTime() + 6*86400000); we.setHours(23,59,59,999);
+    if (today >= ws && today <= we) { todayWeekIdx = wi; break; }
+  }
+
+  // Build month-span groups for header
+  var monthGroups = [];
+  var curMonth = -1, curYear = -1, curSpan = 0, curStart = 0;
+  for (var wi = 0; wi < weeks.length; wi++) {
+    var m = weeks[wi].getMonth(), y = weeks[wi].getFullYear();
+    if (m !== curMonth || y !== curYear) {
+      if (curSpan > 0) monthGroups.push({ label: PERT_MONTH_NAMES[curMonth] + ' ' + curYear, span: curSpan, start: curStart });
+      curMonth = m; curYear = y; curSpan = 1; curStart = wi;
+    } else { curSpan++; }
+  }
+  monthGroups.push({ label: PERT_MONTH_NAMES[curMonth] + ' ' + curYear, span: curSpan, start: curStart });
+
+  var COL_W = 56; // px per week column
+  var ROW_H = 36;
+  var LABEL_W = 220;
+
+  var totalW = LABEL_W + weeks.length * COL_W;
+
+  var html = '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+  html += '<table style="border-collapse:collapse;min-width:' + totalW + 'px;font-size:12px;table-layout:fixed">';
+
+  // Row 1: Month headers
+  html += '<thead>';
+  html += '<tr>';
+  html += '<th style="width:' + LABEL_W + 'px;min-width:' + LABEL_W + 'px;background:var(--surface-2);border:1px solid var(--border);padding:6px 10px;text-align:left;font-size:11px;color:var(--text-3);font-weight:700;text-transform:uppercase;letter-spacing:.5px">Task</th>';
+  for (var mg = 0; mg < monthGroups.length; mg++) {
+    var grp = monthGroups[mg];
+    html += '<th colspan="' + grp.span + '" style="width:' + (grp.span*COL_W) + 'px;background:var(--surface-2);border:1px solid var(--border);padding:4px 6px;text-align:center;font-size:11px;font-weight:700;color:var(--text-1)">' + grp.label + '</th>';
+  }
+  html += '</tr>';
+
+  // Row 2: Week date headers
+  html += '<tr>';
+  html += '<th style="background:var(--surface-2);border:1px solid var(--border);padding:4px 8px"></th>';
+  for (var wi = 0; wi < weeks.length; wi++) {
+    var isToday = wi === todayWeekIdx;
+    var d = weeks[wi];
+    var label = (d.getDate()) + '/' + (d.getMonth()+1);
+    html += '<th style="width:' + COL_W + 'px;background:' + (isToday ? '#eff6ff' : 'var(--surface-2)') + ';border:1px solid var(--border);padding:3px 2px;text-align:center;font-size:10px;color:' + (isToday ? '#1d4ed8' : 'var(--text-3)') + ';font-weight:' + (isToday ? '700' : '500') + '">' + label + '</th>';
+  }
+  html += '</tr>';
+  html += '</thead>';
+
+  // Body rows — one per task
+  html += '<tbody>';
+
+  if (tasks.length === 0) {
+    html += '<tr><td colspan="' + (weeks.length + 1) + '" style="padding:20px;text-align:center;color:var(--text-3);font-style:italic;border:1px solid var(--border)">No tasks found for this project.</td></tr>';
+  }
+
+  for (var ti = 0; ti < tasks.length; ti++) {
+    var t = tasks[ti];
+    var weekIdx = _pertTaskWeekIdx_(t.dueDate, weeks);
+    var isApproved  = t.status === 'Completed' && t.approvalStatus === 'Approved';
+    var isCompleted = t.status === 'Completed';
+    var isProgress  = t.status === 'In Progress';
+    var dueD = t.dueDate ? new Date(t.dueDate) : null;
+    dueD && dueD.setHours(0,0,0,0);
+    var isOverdueTask = dueD && dueD < today && !isCompleted;
+
+    var rowBg = ti % 2 === 0 ? 'var(--surface)' : 'var(--surface-2)';
+    html += '<tr style="background:' + rowBg + '">';
+
+    // Task name cell
+    var nameColor = isApproved ? '#15803d' : isOverdueTask ? '#dc2626' : 'var(--text-1)';
+    html += '<td style="border:1px solid var(--border);padding:6px 10px;max-width:' + LABEL_W + 'px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:' + nameColor + ';font-weight:500" title="' + escape(t.name) + (t.dueDate ? ' | Due: ' + t.dueDate : '') + '">';
+    if (isApproved)  html += '<i class="fas fa-check-circle" style="color:#15803d;margin-right:4px;font-size:10px"></i>';
+    if (isOverdueTask) html += '<i class="fas fa-triangle-exclamation" style="color:#dc2626;margin-right:4px;font-size:10px"></i>';
+    html += escape(t.name) + '</td>';
+
+    // Week cells
+    for (var wi = 0; wi < weeks.length; wi++) {
+      var isToday = wi === todayWeekIdx;
+      var hasBar  = wi === weekIdx;
+      var cellBg  = isToday ? 'rgba(219,234,254,.35)' : 'transparent';
+      var barBg   = isApproved ? '#16a34a' : isOverdueTask ? '#dc2626' : isProgress ? '#d97706' : '#6366f1';
+
+      html += '<td style="border:1px solid var(--border);width:' + COL_W + 'px;text-align:center;padding:4px 3px;background:' + cellBg + '">';
+      if (hasBar) {
+        html += '<div style="height:20px;border-radius:4px;background:' + barBg + ';opacity:.85;display:flex;align-items:center;justify-content:center">';
+        html += '<div style="width:6px;height:6px;border-radius:50%;background:#fff"></div>';
+        html += '</div>';
+      }
+      html += '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+
+  // Legend
+  html += '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;padding:10px 14px;background:var(--surface-2);border-radius:var(--r-md);font-size:11px">';
+  html += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#16a34a;margin-right:4px;vertical-align:middle"></span>Approved</span>';
+  html += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#d97706;margin-right:4px;vertical-align:middle"></span>In Progress</span>';
+  html += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#dc2626;margin-right:4px;vertical-align:middle"></span>Overdue</span>';
+  html += '<span><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:#6366f1;margin-right:4px;vertical-align:middle"></span>Not Started</span>';
+  html += '<span style="margin-left:auto;color:var(--text-3)"><span style="display:inline-block;width:14px;height:10px;border-radius:2px;background:rgba(219,234,254,.7);border:1px solid #bfdbfe;margin-right:4px;vertical-align:middle"></span>Current week</span>';
+  html += '</div>';
+
+  return html;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+function openProjectModal(projectId) {
+  // Always fetch clients and teams fresh from the server before opening.
+  // This guarantees the dropdowns are never blank, regardless of whether
+  // loadProjectsPage() has run, what the cache contains, or which sheet
+  // SPREADSHEET_ID currently points to.
+  showLoading('Opening project form…');
+  Promise.all([
+    runServer('getClients'),
+    runServer('getTeams')
+  ]).then(function(res) {
+    allClients = res[0] || [];
+    allTeams   = res[1] || [];
+    hideLoading();
+    _openProjectModal_(projectId);
+  }).catch(function(e) {
+    hideLoading();
+    toast('Could not load clients/teams: ' + (e && e.message || 'Unknown error'), 'error');
+  });
+}
+
+function _openProjectModal_(projectId) {
+  var isEdit = !!projectId;
+  document.getElementById('projectModalTitle').textContent = isEdit ? 'Edit Project' : 'New Project';
+  document.getElementById('projectId').value = projectId || '';
+
+  var tasksSection = document.getElementById('initialTasksSection');
+  if (tasksSection) tasksSection.style.display = isEdit ? 'none' : '';
+
+  clearInitialTasks();
+
+  var clientNames = allClients.map(function(c){ return c.name; });
+  populateSelect('projManager', allTeams.filter(function(m){ return m.role === 'Admin' || m.role === 'Team Leader'; }), 'name', 'name');
+  populateSelect('projTeamLead', allTeams, 'email', 'name');
+
+  var staffNames = allTeams.map(function(m){ return m.name; });
+
+  if (isEdit) {
+    var p = null;
+    for (var i = 0; i < allProjects.length; i++) { if (allProjects[i].id === projectId) { p = allProjects[i]; break; } }
+    if (!p) return;
+    document.getElementById('projName').value       = p.name       || '';
+    document.getElementById('projClientType').value = p.clientType || '';
+    document.getElementById('projStartDate').value  = toInputDate(p.startDate);
+    document.getElementById('projDeadline').value   = toInputDate(p.deadline);
+    document.getElementById('projManager').value    = p.manager    || '';
+    document.getElementById('projTeamLead').value   = p.teamLead   || '';
+    document.getElementById('projStatus').value     = p.status     || 'Active';
+    var selectedClients = (p.client || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    initMultiSelect('ms-projClient', clientNames, selectedClients, { placeholder: 'Select clients…' });
+    var existing = (p.teamMembers || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    initMultiSelect('ms-projTeamMembers', staffNames, existing, { placeholder: 'Select staff members…' });
+  } else {
+    document.getElementById('projName').value = '';
+    ['projClientType','projStartDate','projDeadline','projManager','projTeamLead'].forEach(function(id){ document.getElementById(id).value=''; });
+    document.getElementById('projStatus').value = 'Active';
+    initMultiSelect('ms-projClient', clientNames, [], { placeholder: 'Select clients…' });
+    initMultiSelect('ms-projTeamMembers', staffNames, [], { placeholder: 'Select staff members…' });
+  }
+  openModal('projectModal');
+}
+
+function saveProject() {
+  var id     = document.getElementById('projectId').value;
+  var name   = document.getElementById('projName').value.trim();
+  var client = getMultiSelectString('ms-projClient');
+
+  if (!name) { toast('Project name is required.', 'warning'); return; }
+
+  var ct    = document.getElementById('projClientType').value;
+  var start = document.getElementById('projStartDate').value;
+  var dl    = document.getElementById('projDeadline').value;
+  var mgr   = document.getElementById('projManager').value;
+  var tl    = document.getElementById('projTeamLead').value;
+  var team  = getMultiSelectString('ms-projTeamMembers');
+  var stat  = document.getElementById('projStatus').value;
+
+  showLoading(id ? 'Updating project…' : 'Creating project…');
+  closeModal('projectModal');
+
+  if (id) {
+    runServer('updateProject', [id, name, client, start, dl, ct, mgr, team, stat, tl]).then(function(r) {
+      hideLoading();
+      if (r && r.success) {
+        toast('Project updated', 'success');
+        _pageLoaded['projects'] = false;
+        loadProjectsPage();
+      } else {
+        toast('Error: ' + (r && r.error || 'Unknown'), 'error');
+      }
+    }).catch(function(e) { hideLoading(); toast('Server error: ' + (e && e.message), 'error'); });
+  } else {
+    var projectData = { name:name, client:client, startDate:start, deadline:dl,
+                        clientType:ct, manager:mgr, teamMembers:team, teamLead:tl };
+    var taskList    = getInitialTasks();
+
+    runServer('addProjectWithTasks', [projectData, taskList]).then(function(r) {
+      hideLoading();
+      if (r && r.success) {
+        var msg = taskList.length > 0
+          ? 'Project created with ' + taskList.length + ' task' + (taskList.length > 1 ? 's' : '')
+          : 'Project created';
+        toast(msg, 'success');
+        _pageLoaded['projects'] = false;
+        loadProjectsPage();
+      } else {
+        toast('Error: ' + (r && r.error || 'Unknown'), 'error');
+      }
+    }).catch(function(e) { hideLoading(); toast('Server error: ' + (e && e.message), 'error'); });
+  }
+}
+
+function deleteProjectConfirm(id, name) {
+  confirmDelete('Delete project "' + name + '"? Tasks remain assigned.', function() {
+    showLoading('Deleting project…');
+    runServer('deleteProject', [id]).then(function(r) {
+      hideLoading();
+      if (r && r.success) { toast('Project deleted','success'); _pageLoaded['projects']=false; loadProjectsPage(); }
+      else toast('Error: '+(r&&r.error),'error');
+    }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+  });
+}
+
+// ─── TASK MODAL ──────────────────────────────────────────────────────────────
+
+function onFrequencyChange() {
+  var freq  = (document.getElementById('taskFrequency') || {}).value || 'One Time';
+  var drRow = document.getElementById('dueDateRow');
+  var dwRow = document.getElementById('dayOfWeekRow');
+  if (drRow) drRow.style.display  = (freq === 'One Time') ? '' : 'none';
+  if (dwRow) dwRow.style.display  = (freq === 'Weekly')   ? '' : 'none';
+}
+
+function openTaskModal(taskId, projId) {
+  var isEdit = !!taskId;
+
+  // ── Resolve the task object FIRST so we know the correct project for permission checks ──
+  var t = null;
+  if (isEdit) {
+    for (var i = 0; i < allTasks.length; i++) { if (allTasks[i].id === taskId) { t = allTasks[i]; break; } }
+    if (!t) return;
+  }
+  var effectiveProjId = (t && t.projectId) || projId || '';
+
+  // ── Permission ────────────────────────────────────────────────────────────────
+  // Admin: always full edit.
+  // Team Leader who IS the project lead: full edit.
+  // Team Leader who is only a member / Team Member: status-only.
+  var isAdmin      = currentUser.role === 'Admin';
+  var isTeamLeader = currentUser.role === 'Team Leader';
+  var canFullEdit  = isAdmin || (isTeamLeader && _isProjectLead(effectiveProjId));
+
+  document.getElementById('taskModalTitle').textContent = isEdit ? 'Edit Task' : 'New Task';
+  document.getElementById('taskId').value        = taskId || '';
+  document.getElementById('taskProjectId').value = effectiveProjId;
+
+  document.getElementById('taskFullForm').style.display      = canFullEdit ? '' : 'none';
+  document.getElementById('taskStatusOnlyForm').style.display = canFullEdit ? 'none' : '';
+
+  var teamNames = allTeams.map(function(m){ return m.name; });
+  initMultiSelect('ms-taskAssignedTo', teamNames, [], { single: true, placeholder: 'Unassigned' });
+
+  // Populate the Task Approver dropdown (full-edit form only)
+  if (canFullEdit) {
+    _populateTaskApproverSelect_(effectiveProjId);
+  }
+
+  if (isEdit) {
+    document.getElementById('taskProjectId').value = t.projectId;
+    if (canFullEdit) {
+      document.getElementById('taskName').value     = t.name     || '';
+      document.getElementById('taskDueDate').value  = toInputDate(t.dueDate);
+      document.getElementById('taskPriority').value = t.priority || 'Medium';
+      document.getElementById('taskStatus').value   = t.status   || 'In Progress';
+      document.getElementById('taskNotes').value    = t.notes    || '';
+      if (t.assignedTo) setMultiSelectValues('ms-taskAssignedTo', [t.assignedTo]);
+      var fqEdit = document.getElementById('taskFrequency');
+      var dwEdit = document.getElementById('taskDayOfWeek');
+      if (fqEdit) { fqEdit.value = t.frequency || 'One Time'; onFrequencyChange(); }
+      if (dwEdit && t.dayOfWeek) dwEdit.value = t.dayOfWeek;
+      // Override approver select with saved value (or empty = use project lead)
+      _populateTaskApproverSelect_(t.projectId, t.taskApprover || '');
+    } else {
+      document.getElementById('taskNameReadonly').value = t.name   || '';
+      document.getElementById('taskStatusOnly').value   = t.status || 'In Progress';
+      document.getElementById('taskNotesOnly').value    = t.notes  || '';
+    }
+  } else {
+    // New task — pre-fill due date to today + 7 days
+    if (canFullEdit) {
+      ['taskName','taskNotes'].forEach(function(fid){ document.getElementById(fid).value=''; });
+      document.getElementById('taskDueDate').value  = _defaultDueDate();
+      document.getElementById('taskPriority').value = 'Medium';
+      document.getElementById('taskStatus').value   = 'In Progress';
+      // New task: approver dropdown already populated above with no selection (= use project lead)
+    }
+    // Reset frequency for new task
+    var fqEl = document.getElementById('taskFrequency');
+    if (fqEl) { fqEl.value = 'One Time'; onFrequencyChange(); }
+  }
+
+  // Attachments: show only when editing existing task
+  var attachSection = document.getElementById('taskAttachmentsSection');
+  var attachList    = document.getElementById('taskAttachmentsList');
+  if (attachSection) attachSection.style.display = isEdit ? '' : 'none';
+  if (isEdit && attachList) {
+    attachList.innerHTML = '<div style="font-size:12px;color:var(--text-3);padding:4px 0"><i class="fas fa-spinner fa-spin"></i> Loading attachments…</div>';
+    loadTaskAttachments(taskId);
+  }
+  // Reset file input so same file can be uploaded again
+  var fileInp = document.getElementById('taskFileInput');
+  if (fileInp) fileInp.value = '';
+
+  openModal('taskModal');
+}
+
+function saveTask() {
+  var id          = document.getElementById('taskId').value;
+  var projId      = document.getElementById('taskProjectId').value;
+  var canFullEdit = currentUser.role === 'Admin' ||
+    (currentUser.role === 'Team Leader' && _isProjectLead(projId));
+  var fn, args;
+
+  if (canFullEdit) {
+    var name     = document.getElementById('taskName').value.trim();
+    var assigned = getMultiSelectString('ms-taskAssignedTo');
+    var due      = document.getElementById('taskDueDate').value;
+    var priority = document.getElementById('taskPriority').value;
+    var status   = document.getElementById('taskStatus').value;
+    var notes    = document.getElementById('taskNotes').value.trim();
+    if (!name) { toast('Task name is required.','warning'); return; }
+    var freq         = (document.getElementById('taskFrequency') || {value:'One Time'}).value || 'One Time';
+    var dow          = freq === 'Weekly' ? ((document.getElementById('taskDayOfWeek') || {value:'Mon'}).value || 'Mon') : '';
+    if (freq === 'Weekly' && !dow) { toast('Please select a day of the week.','warning'); return; }
+    var taskApprover = (document.getElementById('taskApprover') || {value:''}).value || '';
+    fn   = id ? 'updateTask' : 'addTask';
+    args = id ? [id, projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover]
+              : [projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover];
+  } else {
+    var status2 = document.getElementById('taskStatusOnly').value;
+    var notes2  = document.getElementById('taskNotesOnly').value.trim();
+    if (!id) { toast('Cannot create tasks as a staff member.','warning'); return; }
+    fn   = 'updateTaskStatus';
+    args = [id, status2, notes2];
+  }
+
+  showLoading(id ? 'Saving task…' : 'Creating task…');
+  closeModal('taskModal');
+
+  runServer(fn, args).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      toast(id ? 'Task updated' : 'Task created', 'success');
+      _pageLoaded['projects'] = false;
+      loadProjectsPage();
+    } else {
+      toast('Error: '+(r&&r.error||'Unknown'),'error');
+    }
+  }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+}
+
+function deleteTaskConfirm(id, name) {
+  confirmDelete('Delete task "' + name + '"?', function() {
+    showLoading('Deleting task…');
+    runServer('deleteTask', [id]).then(function(r) {
+      hideLoading();
+      if (r && r.success) { toast('Task deleted','success'); _pageLoaded['projects']=false; loadProjectsPage(); }
+      else toast('Error: '+(r&&r.error),'error');
+    }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+  });
+}
+
+// ─── TASK APPROVER SELECT HELPER ─────────────────────────────────────────────
+// Rebuilds the #taskApprover <select> from allTeams.
+// projectId — kept for future per-project filtering; not used yet.
+// currentApprover — the stored name string (empty string → "use project lead").
+
+function _populateTaskApproverSelect_(projectId, currentApprover) {
+  var sel = document.getElementById('taskApprover');
+  if (!sel) return;
+  // Use raw name as option VALUE so it round-trips to the sheet unchanged.
+  // escape() is used only for the visible LABEL to guard against HTML chars in names.
+  var html = '<option value="">— Use project lead (default) —</option>';
+  allTeams.forEach(function(m) {
+    var selected = (currentApprover && m.name === currentApprover) ? ' selected' : '';
+    html += '<option value="' + m.name + '"' + selected + '>' + escape(m.name) + '</option>';
+  });
+  sel.innerHTML = html;
+}
+
+// ─── APPROVAL MODAL ──────────────────────────────────────────────────────────
+
+function openApprovalModal(taskId) {
+  var t = null;
+  for (var i = 0; i < allTasks.length; i++) { if (allTasks[i].id === taskId) { t = allTasks[i]; break; } }
+  if (!t) return;
+
+  document.getElementById('approvalTaskId').value  = taskId;
+  document.getElementById('approvalRemarks').value = '';
+
+  var p = null;
+  for (var j = 0; j < allProjects.length; j++) { if (allProjects[j].id === t.projectId) { p = allProjects[j]; break; } }
+
+  var stageLabel = 'Lead Review';
+
+  document.getElementById('approvalTaskInfo').innerHTML =
+    '<div style="display:flex;flex-direction:column;gap:6px">' +
+    '<div style="font-size:13px;color:var(--blue);font-weight:600;margin-bottom:2px"><i class="fas fa-circle-dot"></i> ' + stageLabel + '</div>' +
+    '<div style="font-size:15px;font-weight:700;color:var(--text-1)">' + escape(t.name) + '</div>' +
+    '<div style="font-size:12px;color:var(--text-3)">' +
+      '<i class="fas fa-folder" style="color:var(--blue)"></i> ' + escape((p&&p.name)||t.projectId) +
+      '  <i class="fas fa-user" style="color:var(--blue);margin-left:8px"></i> ' + escape(t.assignedTo||'—') +
+      '  <i class="fas fa-calendar" style="color:var(--blue);margin-left:8px"></i> ' + fmtDate(t.dueDate) +
+    '</div>' +
+    (t.notes ? '<div style="font-size:12px;background:var(--surface-2);padding:7px 10px;border-radius:var(--r-sm);color:var(--text-2);margin-top:4px"><em>' + escape(t.notes) + '</em></div>' : '') +
+    '</div>';
+
+  document.querySelectorAll('input[name="decision"]').forEach(function(r){ r.checked = r.value === 'Approved'; });
+  openModal('approvalModal');
+}
+
+function submitApproval() {
+  var taskId   = document.getElementById('approvalTaskId').value;
+  var decision = document.querySelector('input[name="decision"]:checked');
+  var remarks  = document.getElementById('approvalRemarks').value.trim();
+  if (!decision) { toast('Please select a decision.','warning'); return; }
+
+  showLoading('Submitting decision…');
+  closeModal('approvalModal');
+
+  runServer('approveTask', [taskId, decision.value, remarks]).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      toast(decision.value === 'Approved' ? 'Task approved ✓' : 'Task sent back for rework',
+            decision.value === 'Approved' ? 'success' : 'warning');
+      _pageLoaded['projects'] = false;
+      loadProjectsPage();
+    } else {
+      toast('Error: '+(r&&r.error||'Unknown'),'error');
+    }
+  }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
+}
+
+// ─── COMPLETED PROJECTS ──────────────────────────────────────────────────────
+
+function loadCompletedProjects() {
+  var container = document.getElementById('completedProjectsContainer');
+  if (container) container.innerHTML = skeletonCards(3);
+
+  runServer('getCompletedProjects').then(function(projects) {
+    renderCompletedProjects(projects);
+  }).catch(function() {
+    if (container) container.innerHTML = emptyState('fa-circle-exclamation','Error loading','Please refresh');
+  });
+}
+
+function renderCompletedProjects(projects) {
+  var statsRow  = document.getElementById('completedStatsRow');
+  var container = document.getElementById('completedProjectsContainer');
+
+  if (!projects || projects.length === 0) {
+    if (statsRow)  statsRow.innerHTML  = '';
+    if (container) container.innerHTML = emptyState('fa-trophy','No completed projects yet','Projects appear here when all tasks are approved');
+    return;
+  }
+
+  var onTime = 0, late = 0;
+  for (var i = 0; i < projects.length; i++) {
+    if (projects[i].deliveredOnTime === true)  onTime++;
+    if (projects[i].deliveredOnTime === false) late++;
+  }
+
+  if (statsRow) {
+    statsRow.innerHTML =
+      kpiMini(projects.length,'Total Completed') +
+      kpiMini(onTime,'On Time','color:var(--green)') +
+      (late > 0 ? kpiMini(late,'Late','color:var(--red)') : '');
+  }
+
+  var cards = [];
+  for (var i = 0; i < projects.length; i++) {
+    var p  = projects[i];
+    var ot = p.deliveredOnTime === true;
+    cards.push(
+      '<div class="completed-card">' +
+      '<div class="cc-header">' +
+        '<div>' +
+          '<div class="cc-title">' + escape(p.name) + '</div>' +
+          '<div class="cc-client"><i class="fas fa-briefcase" style="color:var(--blue)"></i>' + escape(p.client||'—') +
+          ' <span class="badge badge-member" style="font-size:10px">' + escape(p.clientType||'') + '</span></div>' +
+        '</div>' +
+        (p.deliveredOnTime !== null
+          ? '<span class="on-time-chip ' + (ot?'yes':'late') + '"><i class="fas ' + (ot?'fa-check':'fa-clock') + '"></i>' + (ot?'On Time':'Late') + '</span>'
+          : '') +
+      '</div>' +
+      '<div class="prog-bar"><div class="prog-fill prog-green" style="width:100%"></div></div>' +
+      '<div style="font-size:11px;text-align:right;color:var(--green);font-weight:600;margin-top:4px">' + p.completedTasks + '/' + p.totalTasks + ' tasks complete</div>' +
+      '<div class="cc-meta">' +
+        (p.completedDate ? '<span><i class="fas fa-calendar-check"></i>' + p.completedDate + '</span>' : '') +
+        '<span><i class="fas fa-user-tie"></i>' + escape(p.manager||'—') + '</span>' +
+        (p.deadline ? '<span><i class="fas fa-flag-checkered"></i>Deadline: ' + fmtDate(p.deadline) + '</span>' : '') +
+      '</div>' +
+      '</div>'
+    );
+  }
+
+  if (container) container.innerHTML = '<div class="completed-grid">' + cards.join('') + '</div>';
+}
+
+function kpiMini(val, lbl, style) {
+  return '<div class="kpi-mini"><div class="kpi-mini-val" ' + (style?'style="'+style+'"':'') + '>' + val + '</div><div class="kpi-mini-lbl">' + lbl + '</div></div>';
+}
+
+// ─── REASSIGN TASK ────────────────────────────────────────────────────────────
+
+function openReassignModal(taskId) {
+  var t = null;
+  for (var i = 0; i < allTasks.length; i++) { if (allTasks[i].id === taskId) { t = allTasks[i]; break; } }
+  if (!t) { toast('Task not found.', 'error'); return; }
+
+  document.getElementById('reassignTaskId').value         = taskId;
+  document.getElementById('reassignTaskName').textContent  = t.name || '';
+  document.getElementById('reassignCurrentAssignee').value = t.assignedTo || '(Unassigned)';
+
+  // Populate reassign dropdown with all team members, excluding current assignee
+  var sel  = document.getElementById('reassignNewAssignee');
+  var first = '<option value="">Select team member…</option>';
+  var opts  = '';
+  allTeams.forEach(function(m) {
+    opts += '<option value="' + escape(m.name) + '">' + escape(m.name) + '</option>';
+  });
+  sel.innerHTML = first + opts;
+
+  openModal('reassignModal');
+}
+
+function submitReassign() {
+  var taskId      = document.getElementById('reassignTaskId').value;
+  var newAssignee = document.getElementById('reassignNewAssignee').value;
+  if (!newAssignee) { toast('Please select a team member to reassign to.', 'warning'); return; }
+
+  closeModal('reassignModal');
+  showLoading('Reassigning task…');
+
+  runServer('reassignTask', [taskId, newAssignee]).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      toast('Task reassigned to ' + newAssignee, 'success');
+      // Update local copy so the card reflects change immediately
+      for (var i = 0; i < allTasks.length; i++) {
+        if (allTasks[i].id === taskId) { allTasks[i].assignedTo = newAssignee; break; }
+      }
+      _pageLoaded['projects'] = false;
+      loadProjectsPage();
+    } else {
+      toast('Error: ' + (r && r.error || 'Unknown'), 'error');
+    }
+  }).catch(function(e) { hideLoading(); toast('Error: ' + (e && e.message), 'error'); });
+}
+
+// ─── TASK ATTACHMENTS ─────────────────────────────────────────────────────────
+
+function loadTaskAttachments(taskId) {
+  runServer('getTaskAttachments', [taskId])
+    .then(function(attachments) { renderAttachmentsList(attachments || []); })
+    .catch(function() { renderAttachmentsList([]); });
+}
+
+function renderAttachmentsList(attachments) {
+  var list = document.getElementById('taskAttachmentsList');
+  if (!list) return;
+
+  if (!attachments || attachments.length === 0) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--text-4);padding:4px 0;">No files attached yet. Use the Upload button above.</div>';
+    return;
+  }
+
+  var html = '';
+  attachments.forEach(function(a) {
+    var ext  = (a.fileName || '').split('.').pop().toUpperCase().slice(0, 4);
+    var canDel = currentUser.role === 'Admin' || currentUser.role === 'Team Leader' ||
+                 (a.uploadedBy || '').toLowerCase() === (currentUser.name  || '').toLowerCase() ||
+                 (a.uploadedBy || '').toLowerCase() === (currentUser.email || '').toLowerCase();
+
+    html +=
+      '<div class="attach-item">' +
+        '<span style="font-size:10px;font-weight:700;background:var(--blue-pale);color:var(--blue);' +
+          'padding:2px 6px;border-radius:4px;flex-shrink:0;">' + escape(ext) + '</span>' +
+        '<span class="attach-item-name" title="' + escape(a.fileName) + '">' + escape(a.fileName) + '</span>' +
+        '<span class="attach-item-meta">' + escape(a.uploadedBy || '') + '</span>' +
+        '<a href="' + a.viewUrl + '" target="_blank" class="act-btn" title="Open file" style="text-decoration:none;">' +
+          '<i class="fas fa-arrow-up-right-from-square"></i></a>' +
+        (canDel
+          ? '<button class="act-btn act-btn-delete" onclick="deleteTaskAttachment(\'' + escape(a.id) + '\',\'' + escape(a.fileName).replace(/'/g,"\\'") + '\')" title="Delete attachment"><i class="fas fa-trash"></i></button>'
+          : '') +
+      '</div>';
+  });
+  list.innerHTML = html;
+}
+
+function uploadTaskAttachment(inputEl) {
+  var file    = inputEl.files && inputEl.files[0];
+  if (!file) return;
+
+  var taskId = document.getElementById('taskId').value;
+  if (!taskId) { toast('Save the task first before uploading attachments.', 'warning'); return; }
+
+  if (file.size > 5 * 1024 * 1024) { toast('File exceeds 5 MB limit.', 'error'); return; }
+
+  var list = document.getElementById('taskAttachmentsList');
+  if (list) list.innerHTML = '<div style="font-size:12px;color:var(--text-3);padding:4px 0"><i class="fas fa-spinner fa-spin"></i> Uploading…</div>';
+
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var b64 = e.target.result.split(',')[1]; // strip "data:mime;base64,"
+    var projId = document.getElementById('taskProjectId').value || '';
+    runServer('addAttachment', [taskId, projId, file.name, b64, file.type])
+      .then(function(r) {
+        if (r && r.success) {
+          toast('File uploaded: ' + file.name, 'success');
+          loadTaskAttachments(taskId);
+        } else {
+          toast('Upload failed: ' + (r && r.error || 'Unknown'), 'error');
+          loadTaskAttachments(taskId);
+        }
+      })
+      .catch(function(e) {
+        toast('Upload error: ' + (e && e.message), 'error');
+        loadTaskAttachments(taskId);
+      });
+  };
+  reader.readAsDataURL(file);
+  // Reset input so same file can be re-uploaded if needed
+  inputEl.value = '';
+}
+
+function deleteTaskAttachment(attachmentId, fileName) {
+  confirmDelete('Delete attachment "' + fileName + '"?', function() {
+    var taskId = document.getElementById('taskId').value;
+    runServer('deleteAttachment', [attachmentId]).then(function(r) {
+      if (r && r.success) {
+        toast('Attachment deleted.', 'success');
+        if (taskId) loadTaskAttachments(taskId);
+      } else {
+        toast('Error: ' + (r && r.error), 'error');
+      }
+    }).catch(function(e) { toast('Error: ' + (e && e.message), 'error'); });
+  });
+}
+</script>

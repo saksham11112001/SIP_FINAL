@@ -1,0 +1,129 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_GlobalSearch.html  |  Unified search across Projects + Tasks
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _gsTimer = null;
+var _gsLastQuery = '';
+
+function globalSearchDebounce() {
+  clearTimeout(_gsTimer);
+  _gsTimer = setTimeout(runGlobalSearch, 280);
+}
+
+function runGlobalSearch() {
+  var q = (document.getElementById('globalSearchInput').value || '').trim();
+  if (q === _gsLastQuery) return;
+  _gsLastQuery = q;
+
+  var drop = document.getElementById('globalSearchDrop');
+  if (!q) { drop.style.display = 'none'; return; }
+
+  drop.style.display = '';
+  drop.innerHTML = '<div class="gs-empty"><i class="fas fa-spinner fa-spin"></i> Searching…</div>';
+
+  runServer('searchProjectsAndTasks', [q]).then(function(results) {
+    renderGlobalSearchResults(results, q);
+  }).catch(function() {
+    drop.innerHTML = '<div class="gs-empty">Search error — please try again</div>';
+  });
+}
+
+function renderGlobalSearchResults(results, q) {
+  var drop = document.getElementById('globalSearchDrop');
+  var projs = results.projects || [];
+  var tasks = results.tasks    || [];
+  var html  = [];
+
+  if (projs.length === 0 && tasks.length === 0) {
+    drop.innerHTML = '<div class="gs-empty">No results for "<strong>' + escape(q) + '</strong>"</div>';
+    return;
+  }
+
+  if (projs.length > 0) {
+    html.push('<div class="gs-section">Projects (' + projs.length + ')</div>');
+    for (var i = 0; i < projs.length; i++) {
+      var p = projs[i];
+      html.push(
+        '<div class="gs-item" onclick="gsGoToProject(\'' + escape(p.id) + '\')">' +
+        '<div class="gs-item-name"><i class="fas fa-folder-open" style="color:var(--blue);margin-right:5px;font-size:11px"></i>' + escape(p.name) + '</div>' +
+        '<div class="gs-item-meta">' + escape(p.client||'—') + ' · ' + escape(p.manager||'—') + ' · ' + statusBadge(p.status) + '</div>' +
+        '</div>'
+      );
+    }
+  }
+
+  if (tasks.length > 0) {
+    html.push('<div class="gs-section">Tasks (' + tasks.length + ')</div>');
+    for (var j = 0; j < tasks.length; j++) {
+      var t = tasks[j];
+      var ov = isOverdue(t.dueDate, t.status);
+      html.push(
+        '<div class="gs-item" onclick="gsGoToTask(\'' + escape(t.id) + '\',\'' + escape(t.projectId) + '\')">' +
+        '<div class="gs-item-name">' +
+          (ov ? '<i class="fas fa-triangle-exclamation" style="color:var(--red);margin-right:5px;font-size:11px"></i>' : '<i class="fas fa-check-square" style="color:var(--text-4);margin-right:5px;font-size:11px"></i>') +
+          escape(t.name) + '</div>' +
+        '<div class="gs-item-meta">' + escape(t.projectName||t.projectId) + ' · ' + escape(t.assignedTo||'Unassigned') + (t.dueDate ? ' · ' + fmtDate(t.dueDate) : '') + '</div>' +
+        '</div>'
+      );
+    }
+  }
+
+  drop.innerHTML = html.join('');
+}
+
+function gsGoToProject(projectId) {
+  closeGlobalSearch();
+  // Navigate to projects page and expand the matching project
+  showPage('projects', document.getElementById('nav-projects'));
+  // After page loads, scroll to project
+  setTimeout(function() {
+    var el = document.getElementById('proj-' + projectId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.style.outline = '2px solid var(--blue)';
+      setTimeout(function() { el.style.outline = ''; }, 1800);
+      // Expand its task list
+      var taskList = document.getElementById('tasks-' + projectId);
+      if (taskList) taskList.classList.add('open');
+    }
+  }, 600);
+}
+
+function gsGoToTask(taskId, projectId) {
+  closeGlobalSearch();
+  showPage('projects', document.getElementById('nav-projects'));
+  setTimeout(function() {
+    var el = document.getElementById('proj-' + projectId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      var taskList = document.getElementById('tasks-' + projectId);
+      if (taskList) taskList.classList.add('open');
+    }
+  }, 600);
+}
+
+function closeGlobalSearch() {
+  var drop  = document.getElementById('globalSearchDrop');
+  var input = document.getElementById('globalSearchInput');
+  if (drop)  drop.style.display = 'none';
+  if (input) input.value = '';
+  _gsLastQuery = '';
+}
+
+function showGlobalSearchDrop() {
+  var q = (document.getElementById('globalSearchInput').value || '').trim();
+  if (q && _gsLastQuery === q) {
+    document.getElementById('globalSearchDrop').style.display = '';
+  }
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', function(e) {
+  var wrap = document.getElementById('globalSearchWrap');
+  if (wrap && !wrap.contains(e.target)) {
+    var drop = document.getElementById('globalSearchDrop');
+    if (drop) drop.style.display = 'none';
+  }
+});
+</script>

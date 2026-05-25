@@ -1,0 +1,336 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_Dashboard.html  |  Dashboard page
+//
+//  CHANGES THIS SESSION:
+//    • _signalDashboardReady_() called after ALL data + charts + tables render
+//    • Called in failure path too (graceful fallback so loader never hangs)
+//    • renderClientTypeChart now reads client types from allClients lookup map
+//      (previously used project.clientType which was often empty)
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _charts = {};
+
+var PALETTE = {
+  blue    : ['#3182ce','#4299e1','#63b3ed','#90cdf4','#bee3f8'],
+  proj    : { Active:'#10b981', Completed:'#3182ce' }
+};
+
+// ─── SKELETON ────────────────────────────────────────────────────────────────
+
+function showDashboardSkeleton() {
+  ['totalProjects','totalTasks','pendingTasks','overdueTasks','pendingApproval'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) { el.textContent = '—'; el.classList.add('skeleton-pulse'); }
+  });
+  var rp = document.getElementById('recentProjectsBody');
+  if (rp) rp.innerHTML = skeletonRows(4, 4);
+  var rt = document.getElementById('recentTasksBody');
+  if (rt) rt.innerHTML = skeletonRows(4, 5);
+}
+
+function clearDashboardSkeleton() {
+  ['totalProjects','totalTasks','pendingTasks','overdueTasks','pendingApproval'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.remove('skeleton-pulse');
+  });
+}
+
+// ─── ENTRY POINT ─────────────────────────────────────────────────────────────
+
+var _dashboardAttempt = 0;
+
+function loadDashboard() {
+  showDashboardSkeleton();
+  _dashboardAttempt = 0;
+  _tryLoadDashboard();
+}
+
+function _tryLoadDashboard() {
+  _dashboardAttempt++;
+
+  google.script.run
+    .withSuccessHandler(function(data) {
+      if (!data || typeof data !== 'object') {
+        _dashboardOnFailure(new Error('Empty response from server'));
+        return;
+      }
+      clearDashboardSkeleton();
+      renderKPIs(data);
+      renderCharts(data);
+      updateNavBadges(data);
+      // loadRecentTables will call _signalDashboardReady_() when complete
+      loadRecentTables();
+    })
+    .withFailureHandler(_dashboardOnFailure)
+    .getPieChartData();
+}
+
+function _dashboardOnFailure(e) {
+  var delays = [1500, 3000, 5000];
+  if (_dashboardAttempt <= delays.length) {
+    setTimeout(_tryLoadDashboard, delays[_dashboardAttempt - 1]);
+  } else {
+    clearDashboardSkeleton();
+    toast('Failed to load dashboard. Please refresh.', 'error');
+    // Signal ready even on failure so the welcome loader is dismissed
+    if (typeof _signalDashboardReady_ === 'function') _signalDashboardReady_();
+  }
+}
+
+// ─── KPI CARDS ───────────────────────────────────────────────────────────────
+
+function renderKPIs(data) {
+  animateCount('totalProjects',   data.activeProjects   || 0);
+  animateCount('totalTasks',      data.totalTasks       || 0);
+  animateCount('pendingTasks',    data.inProgressTasks  || 0);
+  animateCount('overdueTasks',    data.overdueTasks     || 0);
+  animateCount('pendingApproval', data.pendingApproval  || 0);
+}
+
+function animateCount(id, target) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var start = 0, dur = 550, step = 16;
+  var inc = Math.max(1, Math.ceil(target / (dur / step)));
+  var iv  = setInterval(function() {
+    start = Math.min(start + inc, target);
+    el.textContent = start.toLocaleString();
+    if (start >= target) clearInterval(iv);
+  }, step);
+}
+
+function updateNavBadges(data) {
+  var ba = document.getElementById('navBadgeApproval');
+  if (ba) {
+    ba.textContent   = data.pendingApproval || 0;
+    ba.style.display = (data.pendingApproval > 0) ? '' : 'none';
+  }
+}
+
+// ─── RECENT TABLES ───────────────────────────────────────────────────────────
+
+function loadRecentTables() {
+  Promise.all([
+    runServer('getProjects'),
+    runServer('getTasksPage', [0, 50]),
+    runServer('getClients')
+  ]).then(function(results) {
+    var projects = results[0] || [];
+    var pageData = results[1] || {};
+    var clients  = results[2] || [];
+    var tasks    = pageData.tasks || (Array.isArray(results[1]) ? results[1] : []);
+
+    allProjects = projects;
+    allTasks    = tasks;
+    allClients  = clients;
+
+    renderRecentProjects(projects.slice(0, 6));
+    renderRecentTasks(tasks.slice(-8).reverse());
+    renderClientTypeChart(projects, clients);
+
+    // ─── ALL DONE: signal welcome loader to dismiss ───────────────────────
+    if (typeof _signalDashboardReady_ === 'function') _signalDashboardReady_();
+
+  }).catch(function() {
+    // Non-critical tables failure — still signal ready so loader doesn't hang
+    if (typeof _signalDashboardReady_ === 'function') _signalDashboardReady_();
+  });
+}
+
+function renderRecentProjects(projects) {
+  var tbody = document.getElementById('recentProjectsBody');
+  if (!tbody) return;
+  if (!projects || projects.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4">' + emptyState('fa-folder-open','No projects yet','Add your first project') + '</td></tr>';
+    return;
+  }
+  var rows = [];
+  for (var i = 0; i < projects.length; i++) {
+    var p       = projects[i];
+    var overdue = p.deadline && daysFromToday(p.deadline) < 0 && p.status !== 'Completed';
+    rows.push(
+      '<tr>' +
+      '<td><span style="font-weight:600;color:var(--text-1)">' + escape(p.name) + '</span></td>' +
+      '<td><span style="color:var(--text-3)">' + escape(p.client||'—') + '</span></td>' +
+      '<td><span style="color:' + (overdue ? 'var(--red)' : 'var(--text-2)') + ';font-size:12px">' + fmtDate(p.deadline) + '</span></td>' +
+      '<td>' + statusBadge(p.status) + '</td>' +
+      '</tr>'
+    );
+  }
+  tbody.innerHTML = rows.join('');
+}
+
+function renderRecentTasks(tasks) {
+  var tbody = document.getElementById('recentTasksBody');
+  if (!tbody) return;
+  if (!tasks || tasks.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4">' + emptyState('fa-tasks','No tasks yet','Tasks will appear here') + '</td></tr>';
+    return;
+  }
+  var rows = [];
+  for (var i = 0; i < tasks.length; i++) {
+    var t  = tasks[i];
+    var ov = isOverdue(t.dueDate, t.status);
+    rows.push(
+      '<tr>' +
+      '<td><span style="font-weight:500;color:' + (ov ? 'var(--red)' : 'var(--text-1)') + '">' + escape(t.name) + '</span>' +
+        (t.approvalStatus && t.approvalStatus !== 'Approved' && t.approvalStatus !== 'Rejected'
+          ? ' ' + approvalBadge('Pending') : '') + '</td>' +
+      '<td><span style="font-size:12px;color:var(--text-3)">' + escape(t.assignedTo||'—') + '</span></td>' +
+      '<td><span style="font-size:12px;color:' + (ov ? 'var(--red)' : 'var(--text-2)') + '">' + fmtDate(t.dueDate) + '</span></td>' +
+      '<td>' + statusBadge(t.status) + '</td>' +
+      '</tr>'
+    );
+  }
+  tbody.innerHTML = rows.join('');
+}
+
+// ─── CHARTS ──────────────────────────────────────────────────────────────────
+//  Chart 1: Task Status (from server)
+//  Chart 2: Project Health (from server)
+//  Chart 3: Client Portfolio (built client-side after loadRecentTables)
+
+function renderCharts(data) {
+  // Chart 1: Task Status
+  var tc = data.taskChart || {};
+  buildDoughnut('chartTaskStatus',
+    tc.labels || ['In Progress', 'Approved', 'Pending Approval'],
+    tc.values || [data.inProgressTasks||0, data.completedApproved||0, data.pendingApproval||0],
+    tc.colors || ['#3182ce', '#10b981', '#f59e0b'],
+    null, true);
+
+  // Chart 2: Project Health
+  var pc = data.projectChart || {};
+  buildDoughnut('chartProjStatus',
+    pc.labels || ['Active', 'Completed'],
+    pc.values || [data.activeProjects||0, data.completedProjects||0],
+    pc.colors || ['#3182ce', '#10b981'],
+    'legendProjStatus', false);
+
+  // Chart 3: Client Portfolio — rendered after loadRecentTables
+  _chartPlaceholder('chartClientType', 'Loading…');
+}
+
+function _chartPlaceholder(canvasId, msg) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#9ca3af'; ctx.font = '12px DM Sans, sans-serif';
+  ctx.fillText(msg, canvas.width / 2, canvas.height / 2);
+}
+
+function renderClientTypeChart(projects, clients) {
+  // Build lookup: client name → client type (from Clients sheet)
+  var typeByName = {};
+  if (clients && clients.length) {
+    for (var ci = 0; ci < clients.length; ci++) {
+      if (clients[ci].name && clients[ci].type) {
+        typeByName[clients[ci].name.trim().toLowerCase()] = clients[ci].type;
+      }
+    }
+  }
+
+  var ct = {};
+  for (var i = 0; i < projects.length; i++) {
+    var p   = projects[i];
+    var key = '';
+    // 1st preference: look up client type from Clients sheet
+    if (p.client && typeByName[p.client.trim().toLowerCase()]) {
+      key = typeByName[p.client.trim().toLowerCase()];
+    } else {
+      // Fallback to project.clientType then 'Other'
+      key = p.clientType || 'Other';
+    }
+    ct[key] = (ct[key] || 0) + 1;
+  }
+  var keys = Object.keys(ct).filter(function(k){ return ct[k] > 0; });
+  buildDoughnut('chartClientType', keys, keys.map(function(k){ return ct[k]; }),
+    PALETTE.blue, 'legendClientType', false);
+}
+
+function buildDoughnut(canvasId, labels, values, colors, legendId, showInlineLegend) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  if (typeof Chart === 'undefined') {
+    _chartPlaceholder(canvasId, 'Chart unavailable');
+    return;
+  }
+
+  var ctx = canvas.getContext('2d');
+
+  if (_charts[canvasId]) {
+    try { _charts[canvasId].destroy(); } catch(e) {}
+    _charts[canvasId] = null;
+  }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  var total = values.reduce(function(a, b){ return a + b; }, 0);
+  if (total === 0) {
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#9ca3af'; ctx.font = '13px DM Sans, sans-serif';
+    ctx.fillText('No data', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  try {
+    _charts[canvasId] = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels  : labels,
+        datasets: [{
+          data           : values,
+          backgroundColor: colors,
+          borderWidth    : 2,
+          borderColor    : '#fff',
+          hoverOffset    : 6
+        }]
+      },
+      options: {
+        responsive         : true,
+        maintainAspectRatio: false,
+        cutout             : '72%',
+        plugins: {
+          legend: {
+            display : showInlineLegend,
+            position: 'right',
+            labels  : { boxWidth: 10, font: { size: 11 }, color: '#374151', padding: 10 }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                var val = ctx.parsed;
+                var pct = total > 0 ? Math.round((val / total) * 100) : 0;
+                return ' ' + ctx.label + ': ' + val + ' (' + pct + '%)';
+              }
+            }
+          }
+        }
+      }
+    });
+  } catch(e) {
+    _chartPlaceholder(canvasId, 'Chart error');
+  }
+
+  if (legendId) {
+    var legendEl = document.getElementById(legendId);
+    if (legendEl) {
+      var bits = [];
+      for (var i = 0; i < labels.length; i++) {
+        var pct = total > 0 ? Math.round((values[i] / total) * 100) : 0;
+        bits.push(
+          '<div class="legend-item">' +
+          '<div class="legend-dot" style="background:' + (colors[i] || '#ccc') + '"></div>' +
+          escape(labels[i]) +
+          ' <strong style="color:var(--text-1)">' + values[i] + '</strong>' +
+          ' <span style="color:var(--text-4)">(' + pct + '%)</span></div>'
+        );
+      }
+      legendEl.innerHTML = bits.join('');
+    }
+  }
+}
+</script>

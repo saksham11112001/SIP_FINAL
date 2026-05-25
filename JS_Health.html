@@ -1,0 +1,167 @@
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  JS_Health.html  |  Project Health Check Dashboard
+//
+//  Renders a RAG (Red / Amber / Green / Hold) health view for all active
+//  projects. Each card shows:
+//    • RAG indicator (colour-coded pill)
+//    • Progress bar (% tasks approved)
+//    • Task counts (total / approved / pending approval / overdue)
+//    • Days to deadline chip
+//
+//  Called by: showPage('health') in JS_Utils.html
+// ═══════════════════════════════════════════════════════════════════════════
+
+function loadHealthPage() {
+  var wrap = document.getElementById('page-health');
+  if (!wrap) return;
+
+  // Summary KPIs placeholder
+  document.getElementById('healthSummaryRow').innerHTML = _healthSkeleton_();
+
+  runServer('getProjectHealth')
+    .then(function(data) {
+      _renderHealthSummary_(data.summary);
+      _renderHealthCards_(data.projects);
+    })
+    .catch(function(err) {
+      document.getElementById('healthSummaryRow').innerHTML = '';
+      document.getElementById('healthCardsWrap').innerHTML =
+        '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i>' +
+        '<p>Could not load health data</p><small>' + (err && err.message ? err.message : '') + '</small></div>';
+    });
+}
+
+// ─── Summary KPI pills ───────────────────────────────────────────────────────
+
+function _renderHealthSummary_(s) {
+  document.getElementById('healthSummaryRow').innerHTML =
+    _healthKpi_('fa-circle-exclamation', s.red,   'Critical',    '#ef4444', '#fef2f2') +
+    _healthKpi_('fa-triangle-exclamation', s.amber,'At Risk',     '#f59e0b', '#fffbeb') +
+    _healthKpi_('fa-circle-check',        s.green, 'On Track',    '#10b981', '#ecfdf5') +
+    _healthKpi_('fa-pause-circle',        s.hold,  'On Hold',     '#6b7280', '#f3f4f6');
+}
+
+function _healthKpi_(icon, count, label, color, bg) {
+  return '<div class="health-kpi" style="background:' + bg + ';border-left:4px solid ' + color + ';">' +
+    '<i class="fas ' + icon + '" style="color:' + color + ';font-size:20px;"></i>' +
+    '<div><div class="health-kpi-val" style="color:' + color + '">' + count + '</div>' +
+    '<div class="health-kpi-label">' + label + '</div></div>' +
+    '</div>';
+}
+
+// ─── Project health cards ─────────────────────────────────────────────────────
+
+function _renderHealthCards_(projects) {
+  var wrap = document.getElementById('healthCardsWrap');
+  if (!projects || projects.length === 0) {
+    wrap.innerHTML = emptyState('fa-heart-pulse', 'No active projects', 'All projects are completed or none exist yet.');
+    return;
+  }
+
+  // Group by RAG for optional filter
+  var html = '';
+  projects.forEach(function(p) {
+    html += _healthCard_(p);
+  });
+  wrap.innerHTML = '<div class="health-grid">' + html + '</div>';
+}
+
+function _healthCard_(p) {
+  var ragMeta = _ragMeta_(p.rag);
+  var bar     = p.totalTasks > 0 ? p.pct : 0;
+  var dtdHtml = _deadlineChip_(p.daysToDeadline, p.rag);
+
+  var taskRows = '';
+  if (p.totalTasks > 0) {
+    taskRows =
+      _hcStat_('fa-list-check',          p.totalTasks,      'Total Tasks',       '#6b7280') +
+      _hcStat_('fa-circle-check',        p.approvedTasks,   'Approved',          '#10b981') +
+      _hcStat_('fa-hourglass-half',      p.pendingApproval, 'Pending Approval',  '#f59e0b') +
+      _hcStat_('fa-triangle-exclamation',p.overdueTasks,    'Overdue',           '#ef4444');
+  } else {
+    taskRows = '<div style="font-size:12px;color:var(--text-4);margin-top:4px;">No tasks yet</div>';
+  }
+
+  return '<div class="health-card health-card-' + p.rag + '">' +
+
+    // Header row
+    '<div class="health-card-header">' +
+      '<span class="health-rag-pill" style="background:' + ragMeta.bg + ';color:' + ragMeta.color + ';">' +
+        '<i class="fas ' + ragMeta.icon + '"></i> ' + ragMeta.label +
+      '</span>' +
+      dtdHtml +
+    '</div>' +
+
+    // Project name + client
+    '<div class="health-proj-name">' + escape(p.name) + '</div>' +
+    '<div class="health-proj-client">' +
+      '<i class="fas fa-briefcase" style="margin-right:4px;color:var(--text-4)"></i>' +
+      escape(p.client || '—') +
+    '</div>' +
+
+    // Progress bar
+    (p.totalTasks > 0
+      ? '<div class="health-progress-wrap" title="' + bar + '% tasks approved">' +
+          '<div class="health-progress-bar" style="width:' + bar + '%;background:' + ragMeta.color + ';"></div>' +
+        '</div>' +
+        '<div class="health-pct">' + bar + '% complete</div>'
+      : '') +
+
+    // Task stat row
+    '<div class="health-stats-row">' + taskRows + '</div>' +
+
+    '</div>';
+}
+
+function _hcStat_(icon, value, label, color) {
+  return '<div class="hc-stat">' +
+    '<i class="fas ' + icon + '" style="color:' + color + '"></i>' +
+    '<span class="hc-stat-val">' + value + '</span>' +
+    '<span class="hc-stat-label">' + label + '</span>' +
+    '</div>';
+}
+
+function _ragMeta_(rag) {
+  var map = {
+    red  : { icon:'fa-circle-exclamation',  label:'Critical', color:'#ef4444', bg:'#fef2f2' },
+    amber: { icon:'fa-triangle-exclamation',label:'At Risk',  color:'#f59e0b', bg:'#fffbeb' },
+    green: { icon:'fa-circle-check',        label:'On Track', color:'#10b981', bg:'#ecfdf5' },
+    hold : { icon:'fa-pause-circle',        label:'On Hold',  color:'#6b7280', bg:'#f3f4f6' }
+  };
+  return map[rag] || map.green;
+}
+
+function _deadlineChip_(days, rag) {
+  if (days === null || days === undefined) return '';
+  var color, bg, icon;
+  if (days < 0) {
+    color = '#ef4444'; bg = '#fef2f2';
+    icon  = 'fa-circle-exclamation';
+    return '<span class="health-deadline-chip" style="color:' + color + ';background:' + bg + ';">' +
+      '<i class="fas ' + icon + '"></i> ' + Math.abs(days) + 'd overdue</span>';
+  }
+  if (days === 0) {
+    color = '#f59e0b'; bg = '#fffbeb'; icon = 'fa-clock';
+    return '<span class="health-deadline-chip" style="color:' + color + ';background:' + bg + ';">' +
+      '<i class="fas ' + icon + '"></i> Due today</span>';
+  }
+  if (days <= 7) {
+    color = '#f59e0b'; bg = '#fffbeb'; icon = 'fa-clock';
+  } else {
+    color = '#6b7280'; bg = '#f3f4f6'; icon = 'fa-calendar-days';
+  }
+  return '<span class="health-deadline-chip" style="color:' + color + ';background:' + bg + ';">' +
+    '<i class="fas ' + icon + '"></i> ' + days + 'd left</span>';
+}
+
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
+
+function _healthSkeleton_() {
+  var out = '';
+  for (var i = 0; i < 4; i++) {
+    out += '<div class="health-kpi skeleton-card" style="height:60px;min-width:120px;"></div>';
+  }
+  return out;
+}
+</script>

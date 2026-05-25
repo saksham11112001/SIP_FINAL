@@ -1,0 +1,1276 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Project Tracker</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&family=Playfair+Display:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <?!= include('CSS') ?>
+  </head>
+  <body>
+    <style>
+      /* Period filter buttons */
+      .period-btn {
+        font-size: 12px;
+        padding: 5px 14px;
+        border-radius: 99px;
+        cursor: pointer;
+      }
+      .period-btn.active {
+        background: var(--blue) !important;
+        color: #fff !important;
+        border-color: var(--blue) !important;
+      }
+      /* Hold / Warning button */
+      .btn-warning {
+        background: var(--amber, #f59e0b) !important;
+        color: #fff !important;
+        border-color: var(--amber, #f59e0b) !important;
+      }
+      .btn-warning:hover {
+        opacity: 0.88;
+      }
+      /* On Hold project group — subtle visual indicator */
+      .proj-on-hold {
+        opacity: 0.82;
+      }
+      .proj-on-hold .proj-group-header {
+        background: repeating-linear-gradient(
+          90deg,
+          transparent 0px,
+          transparent 8px,
+          rgba(245, 158, 11, 0.06) 8px,
+          rgba(245, 158, 11, 0.06) 9px
+        ) !important;
+      }
+      /* Hold action button */
+      .act-btn-hold {
+        background: rgba(245, 158, 11, 0.12) !important;
+        color: var(--amber, #f59e0b) !important;
+        border: 1px solid rgba(245, 158, 11, 0.3) !important;
+      }
+      .act-btn-hold:hover {
+        background: rgba(245, 158, 11, 0.22) !important;
+      }
+      /* Reassign action button */
+      .act-btn-reassign {
+        background: rgba(49,130,206,0.10) !important;
+        color: var(--blue, #3182ce) !important;
+        border: 1px solid rgba(49,130,206,0.25) !important;
+      }
+      .act-btn-reassign:hover {
+        background: rgba(49,130,206,0.18) !important;
+      }
+    </style>
+
+    <div id="app">
+      <!-- ═══════════════════════════ SIDEBAR ═══════════════════════════ -->
+      <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <div class="logo">
+            <div class="logo-icon">
+              <img
+                src="data:image/png;base64,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"
+                alt="Secret Ingredient"
+                style="
+                  width: 28px;
+                  height: 28px;
+                  object-fit: contain;
+                  display: block;
+                  filter: brightness(0) invert(1);
+                "
+              />
+            </div>
+            <div class="logo-text">
+              <span class="logo-brand">Secret Ingredient</span>
+              <span class="logo-sub">Project Tracker</span>
+            </div>
+          </div>
+          <button
+            class="sidebar-toggle"
+            onclick="toggleSidebar()"
+            title="Toggle sidebar"
+          >
+            <i class="fas fa-bars"></i>
+          </button>
+        </div>
+
+        <div class="sidebar-nav">
+          <div class="nav-section">
+            <span class="nav-section-title">Overview</span>
+            <div
+              class="nav-item active"
+              id="nav-dashboard"
+              data-page="dashboard"
+              onclick="showPage('dashboard',this,true)"
+            >
+              <div class="nav-icon"><i class="fas fa-chart-line"></i></div>
+              <span class="nav-label">Dashboard</span>
+              <span
+                class="nav-badge"
+                id="navBadgeApproval"
+                style="display: none"
+                >0</span
+              >
+            </div>
+          </div>
+
+          <div class="nav-section">
+            <span class="nav-section-title">Work</span>
+            <div
+              class="nav-item"
+              id="nav-projects"
+              data-page="projects"
+              onclick="showPage('projects',this,true)"
+            >
+              <div class="nav-icon"><i class="fas fa-folder-open"></i></div>
+              <span class="nav-label">Projects &amp; Tasks</span>
+              <span class="nav-badge" id="navBadgePending" style="display: none"
+                >0</span
+              >
+            </div>
+            <div
+              class="nav-item"
+              id="nav-completed"
+              data-page="completed"
+              onclick="showPage('completed',this,true)"
+            >
+              <div class="nav-icon"><i class="fas fa-trophy"></i></div>
+              <span class="nav-label">Completed</span>
+            </div>
+            <div
+              class="nav-item"
+              id="nav-health"
+              data-page="health"
+              onclick="showPage('health',this,true)"
+            >
+              <div class="nav-icon"><i class="fas fa-heart-pulse"></i></div>
+              <span class="nav-label">Health Check</span>
+            </div>
+          </div>
+
+          <div class="nav-section">
+            <span class="nav-section-title">People</span>
+            <div
+              class="nav-item"
+              id="nav-teams"
+              data-page="teams"
+              onclick="showPage('teams',this,true)"
+            >
+              <div class="nav-icon"><i class="fas fa-users"></i></div>
+              <span class="nav-label">Team Performance</span>
+            </div>
+            <div
+              class="nav-item"
+              id="nav-clients"
+              data-page="clients"
+              onclick="showPage('clients',this,true)"
+            >
+              <div class="nav-icon"><i class="fas fa-briefcase"></i></div>
+              <span class="nav-label">Clients</span>
+            </div>
+          </div>
+
+          <div class="nav-section">
+            <span class="nav-section-title">System</span>
+            <div
+              class="nav-item"
+              id="nav-audit"
+              data-page="audit"
+              onclick="showPage('audit',this,true)"
+            >
+              <div class="nav-icon"><i class="fas fa-shield-alt"></i></div>
+              <span class="nav-label">Audit Log</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="user-card">
+            <div class="user-avatar" id="userAvatar">?</div>
+            <div class="user-info">
+              <div class="user-name" id="userName">Loading...</div>
+              <div class="user-role-pill" id="userRolePill">—</div>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <!-- ═══════════════════════════ MAIN ═══════════════════════════ -->
+      <main class="main-content" id="mainContent">
+        <!-- Topbar -->
+        <header class="topbar" id="topbar">
+          <div class="topbar-left">
+            <button class="mobile-menu-btn" onclick="toggleSidebar()">
+              <i class="fas fa-bars"></i>
+            </button>
+            <div class="breadcrumb">
+              <span class="breadcrumb-root">SIP Tracker</span>
+              <i class="fas fa-chevron-right breadcrumb-sep"></i>
+              <span class="breadcrumb-page" id="pageTitle">Dashboard</span>
+            </div>
+          </div>
+          <div class="topbar-right">
+            <div class="topbar-meta" id="topbarUserMeta"></div>
+            <button
+              class="icon-btn"
+              onclick="refreshCurrentPage()"
+              title="Refresh page"
+            >
+              <i class="fas fa-rotate-right"></i>
+            </button>
+            <div class="topbar-date" id="topbarDate"></div>
+          </div>
+        </header>
+
+        <!-- Page wrapper -->
+        <div class="page-wrapper">
+          <!-- ══════════════ DASHBOARD ══════════════ -->
+          <div class="page active" id="page-dashboard">
+            <!-- KPI Row -->
+            <div class="kpi-row">
+              <div class="kpi-card kpi-blue">
+                <div class="kpi-icon-wrap">
+                  <i class="fas fa-folder-open"></i>
+                </div>
+                <div class="kpi-body">
+                  <div class="kpi-value" id="totalProjects">—</div>
+                  <div class="kpi-label">Active Projects</div>
+                </div>
+                <div class="kpi-bg-icon">
+                  <i class="fas fa-folder-open"></i>
+                </div>
+              </div>
+              <div class="kpi-card kpi-green">
+                <div class="kpi-icon-wrap"><i class="fas fa-tasks"></i></div>
+                <div class="kpi-body">
+                  <div class="kpi-value" id="totalTasks">—</div>
+                  <div class="kpi-label">Total Tasks</div>
+                </div>
+                <div class="kpi-bg-icon"><i class="fas fa-tasks"></i></div>
+              </div>
+              <div class="kpi-card kpi-amber">
+                <div class="kpi-icon-wrap"><i class="fas fa-clock"></i></div>
+                <div class="kpi-body">
+                  <div class="kpi-value" id="pendingTasks">—</div>
+                  <div class="kpi-label">Pending Tasks</div>
+                </div>
+                <div class="kpi-bg-icon"><i class="fas fa-clock"></i></div>
+              </div>
+              <div class="kpi-card kpi-red">
+                <div class="kpi-icon-wrap">
+                  <i class="fas fa-triangle-exclamation"></i>
+                </div>
+                <div class="kpi-body">
+                  <div class="kpi-value" id="overdueTasks">—</div>
+                  <div class="kpi-label">Overdue Tasks</div>
+                </div>
+                <div class="kpi-bg-icon">
+                  <i class="fas fa-triangle-exclamation"></i>
+                </div>
+              </div>
+              <div class="kpi-card kpi-purple">
+                <div class="kpi-icon-wrap">
+                  <i class="fas fa-circle-check"></i>
+                </div>
+                <div class="kpi-body">
+                  <div class="kpi-value" id="pendingApproval">—</div>
+                  <div class="kpi-label">Awaiting Approval</div>
+                </div>
+                <div class="kpi-bg-icon">
+                  <i class="fas fa-circle-check"></i>
+                </div>
+              </div>
+            </div>
+
+            <!-- Charts row — 4 doughnut charts via Chart.js -->
+            <div class="chart-grid">
+              <div class="chart-card chart-card-tall">
+                <div class="chart-card-header">
+                  <div>
+                    <div class="chart-card-title">Task Status Breakdown</div>
+                    <div class="chart-card-sub">
+                      All tasks by current status
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-canvas-wrap">
+                  <canvas id="chartTaskStatus"></canvas>
+                </div>
+              </div>
+              <div class="chart-card">
+                <div class="chart-card-header">
+                  <div>
+                    <div class="chart-card-title">Project Health</div>
+                    <div class="chart-card-sub">Active vs completed</div>
+                  </div>
+                </div>
+                <div class="chart-canvas-wrap">
+                  <canvas id="chartProjStatus"></canvas>
+                </div>
+                <div class="chart-legend" id="legendProjStatus"></div>
+              </div>
+              <div class="chart-card">
+                <div class="chart-card-header">
+                  <div>
+                    <div class="chart-card-title">Client Portfolio</div>
+                    <div class="chart-card-sub">Projects by client type</div>
+                  </div>
+                </div>
+                <div class="chart-canvas-wrap">
+                  <canvas id="chartClientType"></canvas>
+                </div>
+                <div class="chart-legend" id="legendClientType"></div>
+              </div>
+            </div>
+
+            <!-- Recent tables -->
+            <div class="twin-table-row">
+              <div class="panel">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <i class="fas fa-folder"></i> Recent Projects
+                  </div>
+                  <button class="text-btn" onclick="showPage('projects')">
+                    View all <i class="fas fa-arrow-right"></i>
+                  </button>
+                </div>
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Project</th>
+                      <th>Client</th>
+                      <th>Deadline</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recentProjectsBody"></tbody>
+                </table>
+              </div>
+              <div class="panel">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <i class="fas fa-tasks"></i> Recent Tasks
+                  </div>
+                  <button class="text-btn" onclick="showPage('projects')">
+                    View all <i class="fas fa-arrow-right"></i>
+                  </button>
+                </div>
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Task</th>
+                      <th>Assignee</th>
+                      <th>Due</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recentTasksBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- ══════════════ PROJECTS & TASKS ══════════════ -->
+          <div class="page" id="page-projects">
+            <div class="page-header-bar">
+              <div>
+                <h1 class="page-h1">Projects &amp; Tasks</h1>
+                <p class="page-sub">
+                  Manage all active projects, grouped by client
+                </p>
+              </div>
+              <div class="page-actions" id="projectPageActions">
+                <!-- All Tasks / My Tasks toggle -->
+                <div
+                  class="task-view-toggle"
+                  role="tablist"
+                  aria-label="Task view"
+                >
+                  <button
+                    class="task-view-btn"
+                    id="btnAllTasks"
+                    onclick="setTaskViewFilter('all')"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                  >
+                    All Tasks
+                  </button>
+
+                  <button
+                    class="task-view-btn active"
+                    id="btnMyTasks"
+                    onclick="setTaskViewFilter('my')"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                  >
+                    My Tasks
+                  </button>
+                </div>
+                <button class="btn btn-outline" onclick="expandAllGroups()">
+                  <i class="fas fa-expand-alt"></i> Expand All
+                </button>
+                <button
+                  class="btn btn-primary"
+                  id="btnAddProject"
+                  onclick="openProjectModal()"
+                >
+                  <i class="fas fa-plus"></i> New Project
+                </button>
+              </div>
+            </div>
+            <div class="filter-strip">
+              <div class="search-wrap">
+                <i class="fas fa-search"></i>
+                <input
+                  type="text"
+                  id="projSearch"
+                  placeholder="Search projects, clients, managers…"
+                  oninput="filterProjects()"
+                />
+              </div>
+              <select
+                class="filter-select"
+                id="projStatusFilter"
+                onchange="filterProjects()"
+              >
+                <option value="">All Statuses</option>
+                <option>Active</option>
+                <option>On Hold</option>
+                <option>Completed</option>
+              </select>
+              <select
+                class="filter-select"
+                id="projClientTypeFilter"
+                onchange="filterProjects()"
+              >
+                <option value="">All Client Types</option>
+                <option>Restaurant</option>
+                <option>Hotel</option>
+                <option>Cafe</option>
+                <option>Food Manufacturer</option>
+                <option>Catering Service</option>
+                <option>Other</option>
+              </select>
+              <button
+                class="btn btn-ghost btn-sm"
+                onclick="clearProjectFilters()"
+              >
+                <i class="fas fa-times"></i> Clear
+              </button>
+            </div>
+            <div id="projectsByClient"></div>
+            <div id="loadMoreWrap"></div>
+          </div>
+
+          <!-- ══════════════ COMPLETED PROJECTS ══════════════ -->
+          <div class="page" id="page-completed">
+            <div class="page-header-bar">
+              <div>
+                <h1 class="page-h1">Completed Projects</h1>
+                <p class="page-sub">
+                  Projects with 100% tasks approved — your delivery track record
+                </p>
+              </div>
+              <div class="kpi-mini-row" id="completedStatsRow"></div>
+            </div>
+            <div id="completedProjectsContainer"></div>
+          </div>
+
+          <!-- ══════════════ HEALTH CHECK ══════════════ -->
+          <div class="page" id="page-health">
+            <div class="page-header-bar">
+              <div>
+                <h1 class="page-h1">Project Health Check</h1>
+                <p class="page-sub">RAG status overview — Red, Amber, Green for every active project</p>
+              </div>
+              <button class="btn btn-outline" onclick="loadHealthPage()">
+                <i class="fas fa-rotate-right"></i> Refresh
+              </button>
+            </div>
+            <!-- Summary KPI pills -->
+            <div class="health-summary-row" id="healthSummaryRow" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;"></div>
+            <!-- Cards grid -->
+            <div id="healthCardsWrap"></div>
+          </div>
+
+          <!-- ══════════════ TIMELINE / GANTT ══════════════ -->
+          <div class="page" id="page-gantt">
+            <div class="page-header-bar">
+              <div>
+                <h1 class="page-h1">Project Timeline</h1>
+                <p class="page-sub">Gantt-style view of all active project schedules and task milestones</p>
+              </div>
+              <button class="btn btn-outline" onclick="loadGanttPage()">
+                <i class="fas fa-rotate-right"></i> Refresh
+              </button>
+            </div>
+            <div id="ganttContent"></div>
+          </div>
+
+          <!-- ══════════════ TEAM PERFORMANCE ══════════════ -->
+          <div class="page" id="page-teams">
+            <div class="page-header-bar">
+              <div>
+                <h1 class="page-h1">Team Performance</h1>
+                <p class="page-sub">
+                  Individual productivity metrics and workload overview
+                </p>
+              </div>
+              <button class="btn btn-primary" id="addMemberBtn" onclick="openTeamModal()">
+                <i class="fas fa-user-plus"></i> Add Member
+              </button>
+            </div>
+
+            <!-- Employee multi-select filter -->
+            <div style="margin-bottom: 12px; max-width: 480px">
+              <div class="ms-wrap" id="ms-teamMemberFilter"></div>
+            </div>
+
+            <!-- Period filter buttons -->
+            <div
+              class="filter-bar"
+              style="
+                margin-bottom: 16px;
+                display: flex;
+                gap: 8px;
+                align-items: center;
+              "
+            >
+              <button
+                class="btn btn-outline period-btn active"
+                data-period="0"
+                onclick="loadTeamPerformance(0)"
+              >
+                All Time
+              </button>
+              <button
+                class="btn btn-outline period-btn"
+                data-period="3"
+                onclick="loadTeamPerformance(3)"
+              >
+                Last 3 Months
+              </button>
+              <button
+                class="btn btn-outline period-btn"
+                data-period="6"
+                onclick="loadTeamPerformance(6)"
+              >
+                Last 6 Months
+              </button>
+            </div>
+
+            <div class="kpi-row kpi-row-sm" id="teamKpiRow"></div>
+            <div class="team-grid" id="teamPerfContainer"></div>
+          </div>
+
+          <!-- ══════════════ CLIENTS ══════════════ -->
+          <div class="page" id="page-clients">
+            <div class="page-header-bar">
+              <div>
+                <h1 class="page-h1">Clients</h1>
+                <p class="page-sub">Manage your client portfolio</p>
+              </div>
+              <button class="btn btn-primary" onclick="openClientModal()">
+                <i class="fas fa-plus"></i> Add Client
+              </button>
+            </div>
+            <div class="panel">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Client Name</th>
+                    <th>Type</th>
+                    <th>Date Added</th>
+                    <th>Projects</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="clientsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ══════════════ AUDIT LOG ══════════════ -->
+          <div class="page" id="page-audit">
+            <div class="page-header-bar">
+              <div>
+                <h1 class="page-h1">Audit Log</h1>
+                <p class="page-sub">Full history of all system actions</p>
+              </div>
+              <div class="filter-strip" style="margin: 0">
+                <div class="search-wrap" style="min-width: 220px">
+                  <i class="fas fa-search"></i>
+                  <input
+                    type="text"
+                    id="auditSearch"
+                    placeholder="Search logs…"
+                    oninput="filterAuditLog()"
+                  />
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Type</th>
+                    <th>Details</th>
+                  </tr>
+                </thead>
+                <tbody id="auditTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <!-- /page-wrapper -->
+      </main>
+    </div>
+    <!-- /app -->
+
+    <!-- ═══════════════════════════ MODALS ═══════════════════════════ -->
+
+    <!-- Project Modal -->
+    <div class="modal-backdrop" id="projectModal">
+      <div class="modal modal-md">
+        <div class="modal-header">
+          <div class="modal-title" id="projectModalTitle">New Project</div>
+          <button class="modal-close" onclick="closeModal('projectModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="projectId" />
+          <div class="form-grid-2">
+            <div class="form-field span-2">
+              <label>Project Name <span class="req">*</span></label>
+              <input
+                type="text"
+                id="projName"
+                placeholder="e.g. Menu Redesign — Grand Palace Hotel"
+              />
+            </div>
+            <div class="form-field">
+              <label>Client</label>
+              <div class="ms-wrap" id="ms-projClient"></div>
+            </div>
+            <div class="form-field">
+              <label>Client Type</label>
+              <select id="projClientType">
+                <option value="">Select type…</option>
+                <option>Restaurant</option>
+                <option>Hotel</option>
+                <option>Cafe</option>
+                <option>Food Manufacturer</option>
+                <option>Catering Service</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Start Date</label>
+              <input type="date" id="projStartDate" />
+            </div>
+            <div class="form-field">
+              <label>Deadline</label>
+              <input type="date" id="projDeadline" />
+            </div>
+            <div class="form-field">
+              <label>Project Manager</label>
+              <select id="projManager">
+                <option value="">Select manager…</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label
+                >Project Lead
+                <span
+                  class="form-hint"
+                  style="font-size: 11px; color: var(--text-3)"
+                  >(approves tasks at first stage)</span
+                ></label
+              >
+              <select id="projTeamLead">
+                <option value="">Select project lead…</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Status</label>
+              <select id="projStatus">
+                <option value="Active">Active</option>
+                <option value="On Hold">On Hold</option>
+                <option value="Completed">Completed</option>
+              </select>
+            </div>
+            <div class="form-field span-2">
+              <label>Staff Members</label>
+              <div class="ms-wrap" id="ms-projTeamMembers"></div>
+            </div>
+          </div>
+
+          <!-- Initial Tasks Section (shown only when creating) -->
+          <div
+            id="initialTasksSection"
+            style="
+              margin-top: 20px;
+              border-top: 1px solid var(--border);
+              padding-top: 16px;
+            "
+          >
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 12px;
+                flex-wrap: wrap;
+                gap: 8px;
+              "
+            >
+              <label
+                style="font-weight: 600; color: var(--text-1); font-size: 13px"
+              >
+                <i
+                  class="fas fa-list-check"
+                  style="color: var(--blue); margin-right: 6px"
+                ></i>
+                Initial Tasks
+                <span
+                  style="
+                    font-weight: 400;
+                    color: var(--text-3);
+                    font-size: 12px;
+                  "
+                  >(optional)</span
+                >
+              </label>
+              <button
+                type="button"
+                class="btn btn-outline btn-sm"
+                onclick="addInitialTaskRow()"
+              >
+                <i class="fas fa-plus"></i> Blank Task
+              </button>
+            </div>
+            <!-- Category quick-add buttons -->
+            <div
+              style="
+                display: flex;
+                gap: 6px;
+                flex-wrap: wrap;
+                margin-bottom: 12px;
+              "
+            >
+              <span
+                style="
+                  font-size: 11px;
+                  color: var(--text-3);
+                  line-height: 28px;
+                  margin-right: 2px;
+                  white-space: nowrap;
+                "
+                >Quick add:</span
+              >
+              <button type="button" onclick="applyTaskTemplate('kickoff')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseover="this.style.background='#ede9fe'" onmouseout="this.style.background='#f5f3ff'">
+                <i class="fas fa-rocket" style="font-size:11px"></i> Kickoff
+              </button>
+              <button type="button" onclick="applyTaskTemplate('location')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border:1px solid #bae6fd;background:#f0f9ff;color:#0369a1;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseover="this.style.background='#e0f2fe'" onmouseout="this.style.background='#f0f9ff'">
+                <i class="fas fa-map-location-dot" style="font-size:11px"></i> Location
+              </button>
+              <button type="button" onclick="applyTaskTemplate('interior')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border:1px solid #fde68a;background:#fef3c7;color:#92400e;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseover="this.style.background='#fde68a'" onmouseout="this.style.background='#fef3c7'">
+                <i class="fas fa-drafting-compass" style="font-size:11px"></i> Interior
+              </button>
+              <button type="button" onclick="applyTaskTemplate('kitchen')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border:1px solid #fecaca;background:#fef2f2;color:#dc2626;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseover="this.style.background='#fee2e2'" onmouseout="this.style.background='#fef2f2'">
+                <i class="fas fa-utensils" style="font-size:11px"></i> Kitchen
+              </button>
+              <button type="button" onclick="applyTaskTemplate('hiring')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border:1px solid #bbf7d0;background:#f0fdf4;color:#15803d;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseover="this.style.background='#dcfce7'" onmouseout="this.style.background='#f0fdf4'">
+                <i class="fas fa-users" style="font-size:11px"></i> Hiring
+              </button>
+              <button type="button" onclick="applyTaskTemplate('branding')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border:1px solid #a5f3fc;background:#ecfeff;color:#0891b2;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s" onmouseover="this.style.background='#cffafe'" onmouseout="this.style.background='#ecfeff'">
+                <i class="fas fa-palette" style="font-size:11px"></i> Branding
+              </button>
+            </div>
+            <div id="initialTasksList"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('projectModal')">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveProject()">
+            <i class="fas fa-save"></i> Save Project
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task Modal -->
+    <div class="modal-backdrop" id="taskModal">
+      <div class="modal modal-md">
+        <div class="modal-header">
+          <div class="modal-title" id="taskModalTitle">New Task</div>
+          <button class="modal-close" onclick="closeModal('taskModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="taskId" />
+          <input type="hidden" id="taskProjectId" />
+
+          <!-- Full form for Admin -->
+          <div id="taskFullForm">
+            <div class="form-grid-2">
+              <div class="form-field span-2">
+                <label>Task Name <span class="req">*</span></label>
+                <input
+                  type="text"
+                  id="taskName"
+                  placeholder="Describe the task clearly…"
+                />
+              </div>
+              <div class="form-field">
+                <label>Assigned To</label>
+                <div class="ms-wrap" id="ms-taskAssignedTo"></div>
+              </div>
+              <div class="form-field">
+                <label>Due Date</label>
+                <input type="date" id="taskDueDate" />
+              </div>
+              <div class="form-field">
+                <label>Priority</label>
+                <select id="taskPriority">
+                  <option value="Low">Low</option>
+                  <option value="Medium" selected>Medium</option>
+                  <option value="High">High</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label>Status</label>
+                <select id="taskStatus">
+                  <option value="In Progress" selected>In Progress</option>
+                  <option value="Completed">Completed</option>
+                </select>
+              </div>
+              <div class="form-field span-2">
+                <label>
+                  Task Approver
+                  <span class="form-hint" style="font-size:11px;color:var(--text-3);margin-left:4px;">
+                    — overrides the project lead for this task only
+                  </span>
+                </label>
+                <select id="taskApprover">
+                  <option value="">— Use project lead (default) —</option>
+                </select>
+                <div class="form-hint-text" style="margin-top:4px;">
+                  Leave blank to use the project lead. Select a specific person (e.g. an SME) to route approval to them instead.
+                </div>
+              </div>
+              <div class="form-field span-2">
+                <label>Notes &amp; Instructions</label>
+                <textarea
+                  id="taskNotes"
+                  rows="3"
+                  placeholder="Any additional context, requirements, or instructions…"
+                ></textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- Status-only form for Team Leader / Team Member -->
+          <div id="taskStatusOnlyForm" style="display: none">
+            <div class="info-banner info-banner-blue">
+              <i class="fas fa-info-circle"></i>
+              <span
+                >You can update the <strong>status</strong> and
+                <strong>notes</strong> for this task.</span
+              >
+            </div>
+            <div class="form-grid-2" style="margin-top: 16px">
+              <div class="form-field span-2">
+                <label>Task</label>
+                <input
+                  type="text"
+                  id="taskNameReadonly"
+                  disabled
+                  class="disabled-input"
+                />
+              </div>
+              <div class="form-field">
+                <label>Update Status <span class="req">*</span></label>
+                <select id="taskStatusOnly">
+                  <option value="In Progress" selected>In Progress</option>
+                  <option value="Completed">Completed</option>
+                </select>
+              </div>
+              <div class="form-field span-2">
+                <label>Progress Notes</label>
+                <textarea
+                  id="taskNotesOnly"
+                  rows="3"
+                  placeholder="Describe what you've done, any blockers, or questions…"
+                ></textarea>
+              </div>
+            </div>
+          </div>
+          <!-- Attachments section — shown only when editing an existing task -->
+          <div id="taskAttachmentsSection" style="display:none;margin-top:20px;border-top:1px solid var(--border);padding-top:16px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+              <label style="font-weight:600;color:var(--text-1);font-size:13px;">
+                <i class="fas fa-paperclip" style="color:var(--blue);margin-right:6px;"></i>
+                Attachments
+              </label>
+              <label class="btn btn-outline btn-sm" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+                <i class="fas fa-upload"></i> Upload File
+                <input type="file" id="taskFileInput" style="display:none;" onchange="uploadTaskAttachment(this)" />
+              </label>
+            </div>
+            <div style="font-size:11px;color:var(--text-4);margin-bottom:10px;">Max 5 MB per file. Files are stored in Google Drive and shared via link.</div>
+            <div id="taskAttachmentsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('taskModal')">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveTask()">
+            <i class="fas fa-save"></i> Save
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Approval Modal -->
+    <div class="modal-backdrop" id="approvalModal">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <div class="modal-title">Review Task Completion</div>
+          <button class="modal-close" onclick="closeModal('approvalModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="approvalTaskId" />
+          <div class="approval-task-info" id="approvalTaskInfo"></div>
+          <div class="form-field" style="margin-top: 16px">
+            <label>Decision <span class="req">*</span></label>
+            <div class="decision-toggle">
+              <label class="decision-opt" id="decisionApprove">
+                <input
+                  type="radio"
+                  name="decision"
+                  value="Approved"
+                  checked
+                  onchange="updateDecisionUI()"
+                />
+                <div class="decision-card decision-approve">
+                  <i class="fas fa-check-circle"></i>
+                  <span>Approve</span>
+                  <small>Mark as complete</small>
+                </div>
+              </label>
+              <label class="decision-opt" id="decisionReject">
+                <input
+                  type="radio"
+                  name="decision"
+                  value="Rejected"
+                  onchange="updateDecisionUI()"
+                />
+                <div class="decision-card decision-reject">
+                  <i class="fas fa-times-circle"></i>
+                  <span>Reject</span>
+                  <small>Send back for rework</small>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div class="form-field" style="margin-top: 16px">
+            <label
+              >Feedback / Remarks
+              <span class="form-hint">optional but recommended</span></label
+            >
+            <textarea
+              id="approvalRemarks"
+              rows="3"
+              placeholder="Provide feedback for the team member…"
+            ></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('approvalModal')">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="submitApproval()">
+            <i class="fas fa-gavel"></i> Submit Decision
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Client Modal -->
+    <div class="modal-backdrop" id="clientModal">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <div class="modal-title" id="clientModalTitle">Add Client</div>
+          <button class="modal-close" onclick="closeModal('clientModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="clientId" />
+          <div class="form-field">
+            <label>Client Name <span class="req">*</span></label>
+            <input
+              type="text"
+              id="clientName"
+              placeholder="e.g. Grand Palace Hotel"
+            />
+          </div>
+          <div class="form-field">
+            <label>Client Type</label>
+            <select id="clientType">
+              <option>Restaurant</option>
+              <option>Hotel</option>
+              <option>Cafe</option>
+              <option>Food Manufacturer</option>
+              <option>Catering Service</option>
+              <option>Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('clientModal')">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveClient()">
+            <i class="fas fa-save"></i> Save
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Team Modal — roles: Manager | Staff only (Team Leader removed) -->
+    <div class="modal-backdrop" id="teamModal">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <div class="modal-title" id="teamModalTitle">Add Team Member</div>
+          <button class="modal-close" onclick="closeModal('teamModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="memberId" />
+          <div class="form-field">
+            <label>Full Name <span class="req">*</span></label>
+            <input
+              type="text"
+              id="memberName"
+              placeholder="e.g. Priya Sharma"
+            />
+          </div>
+          <div class="form-field">
+            <label>Role</label>
+            <select id="memberRole">
+              <option value="Admin">Admin</option>
+              <option value="Team Leader">Team Leader</option>
+              <option value="Team Member" selected>Team Member</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Email Address</label>
+            <input
+              type="email"
+              id="memberEmail"
+              placeholder="priya@company.com"
+            />
+            <div class="form-hint-text">
+              Used for login and automated task reminder emails
+            </div>
+          </div>
+          <div class="form-field">
+            <label>Mobile Number</label>
+            <input type="tel" id="memberMobile" placeholder="+91 98765 43210" />
+            <div class="form-hint-text">Optional — displayed on team card</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('teamModal')">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveTeamMember()">
+            <i class="fas fa-save"></i> Save
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PERT Chart Modal -->
+    <div class="modal-backdrop" id="pertModal">
+      <div class="modal" style="max-width:92vw;width:1100px">
+        <div class="modal-header">
+          <div class="modal-title">
+            <i class="fas fa-chart-gantt" style="color:#6d28d9;margin-right:8px"></i>
+            <span id="pertModalTitle">PERT Chart</span>
+          </div>
+          <button class="modal-close" onclick="closeModal('pertModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body" style="padding:16px">
+          <div id="pertContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('pertModal')">Close</button>
+          <button class="btn btn-outline" id="pertShareBtn" onclick="sharePertChart()" style="display:none">
+            <i class="fas fa-share-nodes"></i> Share PERT
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task Template Picker Modal (for existing projects) -->
+    <div class="modal-backdrop" id="templatePickerModal">
+      <div class="modal modal-md">
+        <div class="modal-header">
+          <div class="modal-title">
+            <i
+              class="fas fa-list-check"
+              style="color: var(--blue); margin-right: 8px"
+            ></i
+            >Add Tasks from Template
+          </div>
+          <button
+            class="modal-close"
+            onclick="closeModal('templatePickerModal')"
+          >
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body" style="padding-top: 12px">
+          <input type="hidden" id="tpProjectId" />
+          <!-- Category tabs -->
+          <div
+            style="
+              display: flex;
+              gap: 6px;
+              flex-wrap: wrap;
+              margin-bottom: 16px;
+            "
+            id="tpCategoryBtns"
+          ></div>
+          <!-- Task checklist -->
+          <div
+            id="tpTaskList"
+            style="max-height: 360px; overflow-y: auto"
+          ></div>
+        </div>
+        <div class="modal-footer" style="justify-content: space-between">
+          <span id="tpSelCount" style="font-size: 12px; color: var(--text-3)"
+            >0 tasks selected</span
+          >
+          <div style="display: flex; gap: 8px">
+            <button
+              class="btn btn-ghost"
+              onclick="closeModal('templatePickerModal')"
+            >
+              Cancel
+            </button>
+            <button class="btn btn-primary" onclick="submitTemplateSelection()">
+              <i class="fas fa-plus"></i> Add Selected Tasks
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reassign Task Modal -->
+    <div class="modal-backdrop" id="reassignModal">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <div class="modal-title"><i class="fas fa-user-pen" style="margin-right:8px;color:var(--blue)"></i>Reassign Task</div>
+          <button class="modal-close" onclick="closeModal('reassignModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="reassignTaskId" />
+          <div class="info-banner info-banner-blue" style="margin-bottom:14px;">
+            <i class="fas fa-info-circle"></i>
+            <span>Reassigning: <strong id="reassignTaskName">—</strong></span>
+          </div>
+          <div class="form-field">
+            <label>Currently Assigned To</label>
+            <input type="text" id="reassignCurrentAssignee" disabled class="disabled-input" />
+          </div>
+          <div class="form-field">
+            <label>Reassign To <span class="req">*</span></label>
+            <select id="reassignNewAssignee">
+              <option value="">Select team member…</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('reassignModal')">Cancel</button>
+          <button class="btn btn-primary" onclick="submitReassign()">
+            <i class="fas fa-user-pen"></i> Reassign
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm Delete Modal -->
+    <div class="modal-backdrop" id="confirmModal">
+      <div class="modal modal-xs">
+        <div class="modal-header">
+          <div class="modal-title">Confirm Deletion</div>
+          <button class="modal-close" onclick="closeModal('confirmModal')">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="confirm-icon"><i class="fas fa-trash-can"></i></div>
+          <p class="confirm-text" id="confirmText">
+            Are you sure you want to delete this item? This action cannot be
+            undone.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" onclick="closeModal('confirmModal')">
+            Cancel
+          </button>
+          <button class="btn btn-danger" id="confirmBtn">
+            <i class="fas fa-trash-can"></i> Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="loading-box">
+        <div class="loading-spinner"></div>
+        <div class="loading-label" id="loadingLabel">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-stack" id="toastStack"></div>
+
+    <?!= include('JS_Utils') ?> <?!= include('JS_Dashboard') ?> <?!=
+    include('JS_Projects') ?> <?!= include('JS_Teams') ?> <?!=
+    include('JS_Clients') ?> <?!= include('JS_Audit') ?> <?!=
+    include('JS_Health') ?> <?!= include('JS_Gantt') ?>
+  </body>
+</html>

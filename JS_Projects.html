@@ -19,8 +19,8 @@ var _bgLoadGen        = 0;      // generation counter — incremented on every l
                                 // so any in-flight background batches from a previous load
                                 // know they are stale and must not append to allTasks
 
-// PERT share state — tracks which project the open PERT modal belongs to
-var _pertProjectId_   = null;
+// PERT share state — temporarily disabled
+// var _pertProjectId_   = null;
 
 // ─── TASK VIEW FILTER (All Tasks / My Tasks) ─────────────────────────────────
 
@@ -46,6 +46,71 @@ function isAdmin() {
 }
 
 // ─── LOAD ────────────────────────────────────────────────────────────────────
+
+// ─── OPTIMISTIC LOCAL TASK UPDATES ───────────────────────────────────────────
+// Patch allTasks in-place and re-render immediately after task mutations so the
+// UI reflects changes instantly without skeleton-flash from a full page reload.
+// A quiet background sync runs after 3s to reconcile server state.
+
+function quickCompleteTask(taskId, taskName) {
+  showLoading('Marking complete…');
+  runServer('updateTaskStatus', [taskId, 'Completed', '']).then(function(r) {
+    hideLoading();
+    if (r && r.success) {
+      toast('"' + taskName + '" marked as completed', 'success');
+      _patchTask_(taskId, { status: 'Completed', approvalStatus: 'Pending TL' });
+      _scheduleQuietRefresh_();
+    } else {
+      toast('Error: ' + (r && r.error || 'Unknown'), 'error');
+    }
+  }).catch(function(e) { hideLoading(); toast('Error: ' + (e && e.message), 'error'); });
+}
+
+function _patchTask_(taskId, changes) {
+  for (var i = 0; i < allTasks.length; i++) {
+    if (allTasks[i].id === taskId) {
+      var keys = Object.keys(changes);
+      for (var k = 0; k < keys.length; k++) allTasks[i][keys[k]] = changes[keys[k]];
+      break;
+    }
+  }
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function _addTaskLocally_(taskId, projId, data) {
+  allTasks.push({
+    id: taskId, projectId: projId,
+    name: data.name || '', assignedTo: data.assignedTo || '',
+    dueDate: data.dueDate || '', status: data.status || 'In Progress',
+    priority: data.priority || 'Medium', notes: data.notes || '',
+    frequency: data.frequency || 'One Time', dayOfWeek: data.dayOfWeek || '',
+    taskApprover: data.taskApprover || '',
+    approvalStatus: data.status === 'Completed' ? 'Pending TL' : '',
+    approvalRemarks: '', approvedBy: '', approvedDate: '', completedDate: '',
+  });
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function _removeTaskLocally_(taskId) {
+  allTasks = allTasks.filter(function(t) { return t.id !== taskId; });
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function _scheduleQuietRefresh_() {
+  // Silently re-fetch tasks 3s after a mutation to reconcile server state.
+  // No skeleton loaders — the UI already shows the optimistic update.
+  setTimeout(function() {
+    runServer('getTasksPage', [0, _taskLimit]).then(function(pageData) {
+      var tasks = Array.isArray(pageData) ? pageData : (pageData && pageData.tasks || []);
+      if (tasks && tasks.length) {
+        allTasks = tasks;
+        renderProjectsByClient(allProjects, allTasks);
+      }
+    }).catch(function() {}); // silent — UI already shows correct data
+  }, 3000);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function loadProjectsPage() {
   var container = document.getElementById('projectsByClient');
@@ -310,7 +375,9 @@ function renderProjectGroup(p, tasks, isAdmin) {
     // Hold / Restart toggle — Manager and Team Leader
     canHold ? '<button class="act-btn ' + (onHold ? 'act-btn-approve' : 'act-btn-hold') + '" onclick="toggleProjectHold(\'' + pid + '\',\'' + escape(p.name).replace(/'/g,"\\'") + '\',\'' + escape(p.status) + '\');event.stopPropagation()" title="' + (onHold ? 'Restart project' : 'Put on hold') + '"><i class="fas ' + (onHold ? 'fa-play' : 'fa-pause') + '"></i></button>' : '',
     (isAdmin || isProjLead) ? '<button class="act-btn act-btn-edit" onclick="openProjectModal(\'' + pid + '\');event.stopPropagation()" title="Edit project"><i class="fas fa-pen"></i></button>' : '',
-    (isAdmin || isProjLead) ? '<button class="act-btn" style="background:rgba(109,40,217,.08);color:#6d28d9;border:1px solid rgba(109,40,217,.25)" onclick="openPertModal(\'' + pid + '\');event.stopPropagation()" title="View PERT chart"><i class="fas fa-chart-gantt"></i></button>' : '',
+    // PERT button temporarily disabled
+    // (isAdmin || isProjLead) ? '<button class="act-btn" style="background:rgba(109,40,217,.08);color:#6d28d9;border:1px solid rgba(109,40,217,.25)" onclick="openPertModal(\'' + pid + '\');event.stopPropagation()" title="View PERT chart"><i class="fas fa-chart-gantt"></i></button>' : '',
+    '',
     isAdmin ? '<button class="act-btn act-btn-delete" onclick="deleteProjectConfirm(\'' + pid + '\',\'' + escape(p.name).replace(/'/g,"\\'") + '\');event.stopPropagation()" title="Delete project"><i class="fas fa-trash"></i></button>' : '',
     '</div></div>',
 
@@ -411,6 +478,10 @@ function renderTaskCard(t, isAdmin, projectOnHold) {
   parts.push('</div><div class="task-card-actions">');
 
   if (canEdit) {
+    // Mark Complete quick-action — only for In Progress tasks
+    if (t.status === 'In Progress') {
+      parts.push('<button class="act-btn act-btn-complete" onclick="quickCompleteTask(\'' + tid + '\',\'' + escape(t.name).replace(/'/g,"\\'") + '\')" title="Mark as completed"><i class="fas fa-circle-check"></i></button>');
+    }
     parts.push('<button class="act-btn act-btn-edit" onclick="openTaskModal(\'' + tid + '\')" title="Edit task"><i class="fas fa-pen"></i></button>');
     // Reassign button — visible to Admin, project lead, or current assignee
     parts.push('<button class="act-btn act-btn-reassign" onclick="openReassignModal(\'' + tid + '\')" title="Reassign task"><i class="fas fa-user-pen"></i></button>');
@@ -662,8 +733,8 @@ var TASK_TEMPLATES = {
     { name: 'Kick off meeting with client', notes: '' },
     { name: 'Fill concept brief form', notes: 'Combination of client brief and Sid/Kula brief' },
     { name: 'Fix weekly calls with client', notes: '' },
-    { name: 'Make PERT chart', notes: '' },
-    { name: 'Share PERT with client', notes: '' },
+    // { name: 'Make PERT chart', notes: '' },        // temporarily disabled
+    // { name: 'Share PERT with client', notes: '' }, // temporarily disabled
     { name: 'Conduct internal site and online research', notes: 'Visit site and surrounding area' },
     { name: 'Create PPT for research and concept note', notes: 'Refer to previous research from team for format' },
     { name: 'Schedule meeting with client to review concept', notes: 'Share over email post meeting' },
@@ -1040,7 +1111,9 @@ function submitTemplateSelection() {
   }).catch(function(e) { hideLoading(); toast('Error: ' + (e && e.message), 'error'); });
 }
 
-// ─── PERT CHART ──────────────────────────────────────────────────────────────
+// ─── PERT CHART — TEMPORARILY DISABLED ──────────────────────────────────────
+
+/* PERT CHART DISABLED — uncomment to re-enable
 
 function openPertModal(projectId) {
   var project = null;
@@ -1248,6 +1321,8 @@ function renderPertChart(project, tasks) {
   return html;
 }
 
+*/ // END PERT CHART DISABLED
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function openProjectModal(projectId) {
@@ -1281,10 +1356,13 @@ function _openProjectModal_(projectId) {
   clearInitialTasks();
 
   var clientNames = allClients.map(function(c){ return c.name; });
-  populateSelect('projManager', allTeams.filter(function(m){ return m.role === 'Admin' || m.role === 'Team Leader'; }), 'name', 'name');
-  populateSelect('projTeamLead', allTeams, 'email', 'name');
+  var mgrNames    = allTeams.filter(function(m){ return m.role === 'Admin' || m.role === 'Team Leader'; }).map(function(m){ return m.name; });
+  var tlNames     = allTeams.map(function(m){ return m.name; });
+  var staffNames  = allTeams.map(function(m){ return m.name; });
 
-  var staffNames = allTeams.map(function(m){ return m.name; });
+  // Initialise searchable single-select for Manager and Team Lead
+  initMultiSelect('ms-projManager',  mgrNames, [], { single: true, placeholder: 'Select manager…' });
+  initMultiSelect('ms-projTeamLead', tlNames,  [], { single: true, placeholder: 'Select project lead…' });
 
   if (isEdit) {
     var p = null;
@@ -1294,16 +1372,29 @@ function _openProjectModal_(projectId) {
     document.getElementById('projClientType').value = p.clientType || '';
     document.getElementById('projStartDate').value  = toInputDate(p.startDate);
     document.getElementById('projDeadline').value   = toInputDate(p.deadline);
-    document.getElementById('projManager').value    = p.manager    || '';
-    document.getElementById('projTeamLead').value   = p.teamLead   || '';
     document.getElementById('projStatus').value     = p.status     || 'Active';
+
+    // Manager — stored as name
+    if (p.manager) setMultiSelectValues('ms-projManager', [p.manager]);
+
+    // Team Lead — stored as email, look up name for display
+    var tlEmail = (p.teamLead || '').trim().toLowerCase();
+    if (tlEmail) {
+      for (var ti = 0; ti < allTeams.length; ti++) {
+        if ((allTeams[ti].email || '').trim().toLowerCase() === tlEmail) {
+          setMultiSelectValues('ms-projTeamLead', [allTeams[ti].name]);
+          break;
+        }
+      }
+    }
+
     var selectedClients = (p.client || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
     initMultiSelect('ms-projClient', clientNames, selectedClients, { placeholder: 'Select clients…' });
     var existing = (p.teamMembers || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
     initMultiSelect('ms-projTeamMembers', staffNames, existing, { placeholder: 'Select staff members…' });
   } else {
     document.getElementById('projName').value = '';
-    ['projClientType','projStartDate','projDeadline','projManager','projTeamLead'].forEach(function(id){ document.getElementById(id).value=''; });
+    ['projClientType','projStartDate','projDeadline'].forEach(function(fid){ document.getElementById(fid).value=''; });
     document.getElementById('projStatus').value = 'Active';
     initMultiSelect('ms-projClient', clientNames, [], { placeholder: 'Select clients…' });
     initMultiSelect('ms-projTeamMembers', staffNames, [], { placeholder: 'Select staff members…' });
@@ -1321,10 +1412,18 @@ function saveProject() {
   var ct    = document.getElementById('projClientType').value;
   var start = document.getElementById('projStartDate').value;
   var dl    = document.getElementById('projDeadline').value;
-  var mgr   = document.getElementById('projManager').value;
-  var tl    = document.getElementById('projTeamLead').value;
+  var mgr   = getMultiSelectValues('ms-projManager')[0] || '';
   var team  = getMultiSelectString('ms-projTeamMembers');
   var stat  = document.getElementById('projStatus').value;
+
+  // Team Lead is displayed by name but stored as email — look up the email
+  var tlName = getMultiSelectValues('ms-projTeamLead')[0] || '';
+  var tl = '';
+  if (tlName) {
+    for (var tli = 0; tli < allTeams.length; tli++) {
+      if (allTeams[tli].name === tlName) { tl = allTeams[tli].email || ''; break; }
+    }
+  }
 
   showLoading(id ? 'Updating project…' : 'Creating project…');
   closeModal('projectModal');
@@ -1483,7 +1582,7 @@ function saveTask() {
     var freq         = (document.getElementById('taskFrequency') || {value:'One Time'}).value || 'One Time';
     var dow          = freq === 'Weekly' ? ((document.getElementById('taskDayOfWeek') || {value:'Mon'}).value || 'Mon') : '';
     if (freq === 'Weekly' && !dow) { toast('Please select a day of the week.','warning'); return; }
-    var taskApprover = (document.getElementById('taskApprover') || {value:''}).value || '';
+    var taskApprover = getMultiSelectValues('ms-taskApprover')[0] || '';
     fn   = id ? 'updateTask' : 'addTask';
     args = id ? [id, projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover]
               : [projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover];
@@ -1502,8 +1601,23 @@ function saveTask() {
     hideLoading();
     if (r && r.success) {
       toast(id ? 'Task updated' : 'Task created', 'success');
-      _pageLoaded['projects'] = false;
-      loadProjectsPage();
+      if (fn === 'addTask') {
+        _addTaskLocally_(r.id || ('t_' + Date.now()), projId, {
+          name: name, assignedTo: assigned, dueDate: due,
+          status: status, priority: priority, notes: notes,
+          frequency: freq, dayOfWeek: dow, taskApprover: taskApprover
+        });
+      } else if (fn === 'updateTask') {
+        _patchTask_(id, {
+          name: name, assignedTo: assigned, dueDate: due,
+          status: status, priority: priority, notes: notes,
+          frequency: freq, dayOfWeek: dow, taskApprover: taskApprover
+        });
+      } else {
+        // updateTaskStatus (staff member path)
+        _patchTask_(id, { status: status2, notes: notes2 });
+      }
+      _scheduleQuietRefresh_();
     } else {
       toast('Error: '+(r&&r.error||'Unknown'),'error');
     }
@@ -1515,7 +1629,7 @@ function deleteTaskConfirm(id, name) {
     showLoading('Deleting task…');
     runServer('deleteTask', [id]).then(function(r) {
       hideLoading();
-      if (r && r.success) { toast('Task deleted','success'); _pageLoaded['projects']=false; loadProjectsPage(); }
+      if (r && r.success) { toast('Task deleted','success'); _removeTaskLocally_(id); _scheduleQuietRefresh_(); }
       else toast('Error: '+(r&&r.error),'error');
     }).catch(function(e){ hideLoading(); toast('Error: '+(e&&e.message),'error'); });
   });
@@ -1527,16 +1641,10 @@ function deleteTaskConfirm(id, name) {
 // currentApprover — the stored name string (empty string → "use project lead").
 
 function _populateTaskApproverSelect_(projectId, currentApprover) {
-  var sel = document.getElementById('taskApprover');
-  if (!sel) return;
-  // Use raw name as option VALUE so it round-trips to the sheet unchanged.
-  // escape() is used only for the visible LABEL to guard against HTML chars in names.
-  var html = '<option value="">— Use project lead (default) —</option>';
-  allTeams.forEach(function(m) {
-    var selected = (currentApprover && m.name === currentApprover) ? ' selected' : '';
-    html += '<option value="' + m.name + '"' + selected + '>' + escape(m.name) + '</option>';
-  });
-  sel.innerHTML = html;
+  var names = allTeams.map(function(m){ return m.name; });
+  initMultiSelect('ms-taskApprover', names,
+    currentApprover ? [currentApprover] : [],
+    { single: true, placeholder: '— Use project lead (default) —' });
 }
 
 // ─── APPROVAL MODAL ──────────────────────────────────────────────────────────
@@ -1584,8 +1692,12 @@ function submitApproval() {
     if (r && r.success) {
       toast(decision.value === 'Approved' ? 'Task approved ✓' : 'Task sent back for rework',
             decision.value === 'Approved' ? 'success' : 'warning');
-      _pageLoaded['projects'] = false;
-      loadProjectsPage();
+      if (decision.value === 'Approved') {
+        _patchTask_(taskId, { approvalStatus: 'Approved' });
+      } else {
+        _patchTask_(taskId, { approvalStatus: 'Rejected', status: 'In Progress' });
+      }
+      _scheduleQuietRefresh_();
     } else {
       toast('Error: '+(r&&r.error||'Unknown'),'error');
     }
@@ -1697,12 +1809,8 @@ function submitReassign() {
     hideLoading();
     if (r && r.success) {
       toast('Task reassigned to ' + newAssignee, 'success');
-      // Update local copy so the card reflects change immediately
-      for (var i = 0; i < allTasks.length; i++) {
-        if (allTasks[i].id === taskId) { allTasks[i].assignedTo = newAssignee; break; }
-      }
-      _pageLoaded['projects'] = false;
-      loadProjectsPage();
+      _patchTask_(taskId, { assignedTo: newAssignee });
+      _scheduleQuietRefresh_();
     } else {
       toast('Error: ' + (r && r.error || 'Unknown'), 'error');
     }

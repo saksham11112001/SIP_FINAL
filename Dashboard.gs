@@ -177,7 +177,7 @@ function getProjectHealth() {
     var result = [];
 
     projects.forEach(function(p) {
-      if (p.status === 'Completed') return; // exclude completed projects
+      if (p.status === 'Completed') return; // completed projects excluded
 
       var projTasks = tasks.filter(function(t) { return t.projectId === p.id; });
       var total     = projTasks.length;
@@ -190,13 +190,42 @@ function getProjectHealth() {
         return d && d < today;
       }).length;
 
-      var deadline          = parseDateLoose_(p.deadline);
-      var daysToDeadline    = deadline ? Math.ceil((deadline - today) / 86400000) : null;
-      var projectOverdue    = daysToDeadline !== null && daysToDeadline < 0;
+      var deadline       = parseDateLoose_(p.deadline);
+      var startDate      = parseDateLoose_(p.startDate);
+      var daysToDeadline = deadline ? Math.ceil((deadline - today) / 86400000) : null;
+      var projectOverdue = daysToDeadline !== null && daysToDeadline < 0;
 
       var pct = total > 0 ? Math.round((approved / total) * 100) : 0;
 
-      // RAG classification
+      // ── Time-based expected progress ──────────────────────────────────────
+      // expectedPct = how much % of the project timeline has elapsed
+      var totalProjectDays = (startDate && deadline)
+        ? Math.ceil((deadline - startDate) / 86400000) : null;
+      var elapsedDays = startDate
+        ? Math.max(0, Math.ceil((today - startDate) / 86400000)) : null;
+      var expectedPct = (totalProjectDays && totalProjectDays > 0 && elapsedDays !== null)
+        ? Math.min(100, Math.round((elapsedDays / totalProjectDays) * 100))
+        : null;
+      // velocity: ratio of actual done vs expected done (1.0 = exactly on pace)
+      var velocity = (expectedPct !== null && expectedPct > 0)
+        ? Math.round((pct / expectedPct) * 100) / 100
+        : null;
+
+      // ── Manpower efficiency (weighted by task due-date span) ──────────────
+      // Each task's weight = days allocated from project start to task due date.
+      // Completing heavier (longer-runway) tasks contributes more to manpower pct.
+      var totalManpowerDays = 0, completedManpowerDays = 0;
+      projTasks.forEach(function(t) {
+        var td = parseDateLoose_(t.dueDate);
+        if (!td || !startDate) return;
+        var days = Math.max(1, Math.ceil((td - startDate) / 86400000));
+        totalManpowerDays += days;
+        if (t.approvalStatus === 'Approved') completedManpowerDays += days;
+      });
+      var manpowerPct = totalManpowerDays > 0
+        ? Math.round((completedManpowerDays / totalManpowerDays) * 100) : 0;
+
+      // ── RAG classification ────────────────────────────────────────────────
       var rag;
       if (p.status === 'On Hold') {
         rag = 'hold';
@@ -209,24 +238,33 @@ function getProjectHealth() {
       }
 
       result.push({
-        id             : p.id,
-        name           : p.name,
-        client         : p.client,
-        clientType     : p.clientType,
-        status         : p.status,
-        deadline       : p.deadline,
-        teamLead       : p.teamLead,
-        rag            : rag,
-        totalTasks     : total,
-        approvedTasks  : approved,
-        pendingApproval: pendingAppr,
-        overdueTasks   : overdueCount,
-        pct            : pct,
-        daysToDeadline : daysToDeadline
+        id                   : p.id,
+        name                 : p.name,
+        client               : p.client,
+        clientType           : p.clientType,
+        status               : p.status,
+        startDate            : p.startDate,
+        deadline             : p.deadline,
+        manager              : p.manager,
+        teamLead             : p.teamLead,
+        rag                  : rag,
+        totalTasks           : total,
+        approvedTasks        : approved,
+        pendingApproval      : pendingAppr,
+        overdueTasks         : overdueCount,
+        pct                  : pct,
+        daysToDeadline       : daysToDeadline,
+        expectedPct          : expectedPct,
+        velocity             : velocity,
+        totalProjectDays     : totalProjectDays,
+        elapsedDays          : elapsedDays,
+        totalManpowerDays    : totalManpowerDays,
+        completedManpowerDays: completedManpowerDays,
+        manpowerPct          : manpowerPct,
       });
     });
 
-    // Sort: red first, then amber, then hold, then green; within same RAG by daysToDeadline asc (nulls last)
+    // Sort: red → amber → hold → green; within same RAG by daysToDeadline asc
     var ragOrder = { red: 0, amber: 1, hold: 2, green: 3 };
     result.sort(function(a, b) {
       var ro = ragOrder[a.rag] - ragOrder[b.rag];

@@ -25,7 +25,7 @@
 //    Admin can approve at any stage (override)
 // =============================================================================
 
-var SPREADSHEET_ID = "1FqTpBg5hcACajjaKgr7gdsmmoEPOlg1Yt9i8XKvbLMU";
+var SPREADSHEET_ID = "19PaR6XwGmeCPOIJuSKFLEGPDL76s-Ebu7o1KrYuVVlw";
 
 var SHEET_NAMES = {
   PROJECTS   : "Projects",
@@ -79,9 +79,9 @@ var PROJ_COL = {
 // =============================================================================
 
 function doGet(e) {
-  // Public PERT share: ?pert=TOKEN serves a standalone chart page (no login required)
-  var pertToken = e && e.parameter && e.parameter.pert;
-  if (pertToken) return _servePertShare_(pertToken);
+  // PERT share temporarily disabled
+  // var pertToken = e && e.parameter && e.parameter.pert;
+  // if (pertToken) return _servePertShare_(pertToken);
 
   var tpl = HtmlService.createTemplateFromFile("Index");
   return tpl
@@ -958,21 +958,11 @@ function setupTrigger() {
 }
 
 // =============================================================================
-//  PUBLIC PERT SHARE  — token-gated, no login required
-//
-//  generatePertLink(projectId)   called by logged-in user via runServer()
-//  _servePertShare_(token)       called by doGet() when ?pert= is in the URL
-//  getPertShareData(token)       called from PertShare.html via google.script.run
-//
-//  Tokens are stored in ScriptProperties as  pert_<UUID> → projectId
-//  clearAllCaches() intentionally skips pert_ keys so links survive cache clears.
+//  PUBLIC PERT SHARE  — TEMPORARILY DISABLED
+//  Uncomment this entire section to re-enable PERT chart sharing.
 // =============================================================================
 
-/**
- * Generate a unique shareable URL for a project's PERT chart.
- * Requires Admin or Team Leader role.
- * Returns { success: true, url: '...' }
- */
+/*
 function generatePertLink(projectId) {
   _requireRole(['Admin', 'Team Leader']);
   if (!projectId) throw new Error('Project ID required');
@@ -983,10 +973,6 @@ function generatePertLink(projectId) {
   return { success: true, url: url };
 }
 
-/**
- * Serve the standalone public PERT chart page.
- * Called by doGet() when ?pert=TOKEN is present in the URL.
- */
 function _servePertShare_(token) {
   var projectId = PropertiesService.getScriptProperties().getProperty('pert_' + token);
   if (!projectId) {
@@ -1012,12 +998,6 @@ function _servePertShare_(token) {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-/**
- * Return project + task data for the public PERT share page.
- * Auth is controlled by the token (only valid if generatePertLink was called).
- * No _requireRole() check — token validation IS the access control.
- * Called from PertShare.html via google.script.run.getPertShareData(token).
- */
 function getPertShareData(token) {
   if (!token) return { error: 'No token provided' };
   var projectId = PropertiesService.getScriptProperties().getProperty('pert_' + token);
@@ -1063,3 +1043,4 @@ function getPertShareData(token) {
   }
   return { project: project, tasks: tasks };
 }
+*/

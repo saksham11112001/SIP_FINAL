@@ -690,9 +690,7 @@
             </div>
             <div class="form-field">
               <label>Project Manager</label>
-              <select id="projManager">
-                <option value="">Select manager…</option>
-              </select>
+              <div class="ms-wrap" id="ms-projManager"></div>
             </div>
             <div class="form-field">
               <label
@@ -703,9 +701,7 @@
                   >(approves tasks at first stage)</span
                 ></label
               >
-              <select id="projTeamLead">
-                <option value="">Select project lead…</option>
-              </select>
+              <div class="ms-wrap" id="ms-projTeamLead"></div>
             </div>
             <div class="form-field">
               <label>Status</label>
@@ -871,9 +867,7 @@
                     — overrides the project lead for this task only
                   </span>
                 </label>
-                <select id="taskApprover">
-                  <option value="">— Use project lead (default) —</option>
-                </select>
+                <div class="ms-wrap" id="ms-taskApprover"></div>
                 <div class="form-hint-text" style="margin-top:4px;">
                   Leave blank to use the project lead. Select a specific person (e.g. an SME) to route approval to them instead.
                 </div>
@@ -1116,7 +1110,7 @@
       </div>
     </div>
 
-    <!-- PERT Chart Modal -->
+    <!-- PERT Chart Modal — TEMPORARILY DISABLED
     <div class="modal-backdrop" id="pertModal">
       <div class="modal" style="max-width:92vw;width:1100px">
         <div class="modal-header">
@@ -1139,6 +1133,7 @@
         </div>
       </div>
     </div>
+    -->
 
     <!-- Task Template Picker Modal (for existing projects) -->
     <div class="modal-backdrop" id="templatePickerModal">

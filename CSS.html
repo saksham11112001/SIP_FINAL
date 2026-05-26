@@ -699,8 +699,10 @@ body {
 .act-btn-edit:hover { background:var(--amber); color:#fff; }
 .act-btn-delete  { color:var(--red);    border-color:#fecaca; background:#fef2f2; }
 .act-btn-delete:hover { background:var(--red); color:#fff; }
-.act-btn-approve { color:var(--green);  border-color:#a7f3d0; background:#f0fdf4; }
-.act-btn-approve:hover { background:var(--green); color:#fff; }
+.act-btn-approve  { color:var(--green);  border-color:#a7f3d0; background:#f0fdf4; }
+.act-btn-approve:hover  { background:var(--green); color:#fff; }
+.act-btn-complete { color:#0891b2;  border-color:#a5f3fc; background:#ecfeff; }
+.act-btn-complete:hover { background:#0891b2; color:#fff; }
 .act-btn-view    { color:var(--blue);   border-color:#bfdbfe; background:var(--blue-pale); }
 .act-btn-view:hover { background:var(--blue); color:#fff; }
 
@@ -1470,8 +1472,34 @@ body.sidebar-open { overflow: hidden; }
   font-size: 12px;
   color: var(--text-2);
 }
-.hc-stat-val  { font-weight: 700; }
+.hc-stat-val   { font-weight: 700; }
 .hc-stat-label { color: var(--text-3); }
+
+.hc-kpi-btn {
+  transition: transform .12s ease, box-shadow .12s ease, opacity .2s ease;
+}
+.hc-kpi-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.hc-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+
+.hc-prog-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  margin-bottom: 4px;
+  gap: 6px;
+}
 
 /* ═══════════════════════════════════════════════════════════
    GANTT / TIMELINE CHART

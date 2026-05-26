@@ -8,7 +8,26 @@
       "Skill(anthropic-skills:xlsx:*)",
       "PowerShell(Rename-Item \"C:\\\\Users\\\\saksh\\\\Desktop\\\\New folder\\\\JS_Project.html\"  \"JS_Projects.html\")",
       "PowerShell(Rename-Item \"C:\\\\Users\\\\saksh\\\\Desktop\\\\New folder\\\\Css.html\"         \"CSS.html\")",
-      "PowerShell(Rename-Item \"C:\\\\Users\\\\saksh\\\\Desktop\\\\New folder\\\\Js_Utils.html\"    \"JS_Utils.html\")"
+      "PowerShell(Rename-Item \"C:\\\\Users\\\\saksh\\\\Desktop\\\\New folder\\\\Js_Utils.html\"    \"JS_Utils.html\")",
+      "Bash(dir /s /b *.gs *.html)",
+      "Bash(node -e \"require\\('pptxgenjs'\\); console.log\\('ok'\\)\")",
+      "Bash(npm list *)",
+      "Bash(npm install *)",
+      "Bash(node make_guide.js)",
+      "Bash(node -e \"require\\('pptxgenjs'\\);console.log\\('ok'\\)\" --require \"C:/Users/saksh/AppData/Roaming/npm/node_modules/pptxgenjs\")",
+      "Bash(set NODE_PATH=C:\\\\Users\\\\saksh\\\\AppData\\\\Roaming\\\\npm\\\\node_modules)",
+      "Bash(node -e \"process.env.NODE_PATH='C:/Users/saksh/AppData/Roaming/npm/node_modules';require\\('module'\\).Module._initPaths\\(\\);require\\('pptxgenjs'\\);console.log\\('ok'\\)\")",
+      "Bash(node -e \"process.env.NODE_PATH='C:/Users/saksh/AppData/Roaming/npm/node_modules';require\\('module'\\).Module._initPaths\\(\\);$\\(cat make_guide.js)",
+      "Bash(python \"C:\\\\Users\\\\saksh\\\\AppData\\\\Roaming\\\\Claude\\\\local-agent-mode-sessions\\\\skills-plugin\\\\e1c20758-33d5-4110-bbd8-21ba235a60ce\\\\43a87b01-46cc-4cc4-9fb0-e607e8751dad\\\\skills\\\\pptx\\\\scripts\\\\office\\\\soffice.py\" --headless --convert-to pdf SIP_Client_Guide.pptx)",
+      "Bash(where soffice *)",
+      "Bash(where libreoffice *)",
+      "Bash(python -c \"from pptx import Presentation; print\\('ok'\\)\")",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "Bash(pip install *)",
+      "Bash(python -c \"from fpdf import FPDF; print\\('fpdf2 ok'\\)\")",
+      "Bash(python -c \"from reportlab.pdfgen import canvas; print\\('reportlab ok'\\)\")",
+      "Bash(python build_pdf.py)",
+      "WebFetch(domain:spreadsheet.dev)"
     ]
   }
 }

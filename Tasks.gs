@@ -564,6 +564,33 @@ function reassignTask(taskId, newAssignee) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  SET TASK APPROVER  — called after file upload so approver can be set inline
+//  Any logged-in user can call this (no role restriction beyond auth check).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function setTaskApprover(taskId, approverName) {
+  try {
+    var user = getCurrentUser();
+    if (user.accessDenied) return { success: false, error: 'Access denied.' };
+
+    clearCache([CACHE_KEYS.TASKS]);
+    var sheet = getSheet(SHEET_NAMES.TASKS);
+    var data  = sheetValues(sheet);
+
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][TASK_COL.ID]) !== String(taskId)) continue;
+      sheet.getRange(i + 1, TASK_COL.TASK_APPROVER + 1).setValue(approverName || '');
+      logAudit(user.name, 'SET_APPROVER', 'Task', taskId,
+        '"' + String(data[i][TASK_COL.NAME] || '') + '" approver → ' + (approverName || 'project lead'));
+      return { success: true };
+    }
+    return { success: false, error: 'Task not found.' };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  DELETE  (Admin only)
 // ─────────────────────────────────────────────────────────────────────────────
 

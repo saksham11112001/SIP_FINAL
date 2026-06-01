@@ -921,17 +921,23 @@
           </div>
           <!-- Attachments section — shown only when editing an existing task -->
           <div id="taskAttachmentsSection" style="display:none;margin-top:20px;border-top:1px solid var(--border);padding-top:16px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
               <label style="font-weight:600;color:var(--text-1);font-size:13px;">
                 <i class="fas fa-paperclip" style="color:var(--blue);margin-right:6px;"></i>
                 Attachments
               </label>
-              <label class="btn btn-outline btn-sm" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
-                <i class="fas fa-upload"></i> Upload File
-                <input type="file" id="taskFileInput" style="display:none;" onchange="uploadTaskAttachment(this)" />
-              </label>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <select id="attachApprover" title="Who should review this file?"
+                  style="padding:5px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12px;color:var(--text-2);background:var(--surface);max-width:180px;">
+                  <option value="">— Reviewer: project lead —</option>
+                </select>
+                <label class="btn btn-outline btn-sm" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+                  <i class="fas fa-upload"></i> Upload File
+                  <input type="file" id="taskFileInput" style="display:none;" onchange="uploadTaskAttachment(this)" />
+                </label>
+              </div>
             </div>
-            <div style="font-size:11px;color:var(--text-4);margin-bottom:10px;">Max 5 MB per file. Files are stored in Google Drive and shared via link.</div>
+            <div style="font-size:11px;color:var(--text-4);margin-bottom:10px;">Select a reviewer before uploading, or leave blank to use the project lead. Max 25 MB per file.</div>
             <div id="taskAttachmentsList" style="display:flex;flex-direction:column;gap:8px;"></div>
           </div>
         </div>

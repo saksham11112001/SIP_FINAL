@@ -2,13 +2,16 @@
 //  Attachments.gs  |  Drive-backed file attachments for tasks
 //
 //  STORAGE:
-//    - Files are stored in a dedicated Google Drive folder.
-//    - Folder ID is cached in ScriptProperties to avoid repeated lookups.
+//    - Files are created in the script owner's Drive, then ownership is
+//      immediately transferred to the uploader's Google account so the file
+//      counts against THEIR quota, not the owner's.
+//    - If ownership transfer fails (cross-domain restriction or admin policy),
+//      the file stays in the owner's Drive as a fallback.
 //    - Metadata is recorded in the "Attachments" sheet.
 //
 //  PERMISSIONS:
 //    - Anyone with the link can VIEW (read-only sharing).
-//    - Max file size: 5 MB per attachment.
+//    - Max file size: 25 MB per attachment.
 //
 //  SHEET COLUMNS (Attachments sheet):
 //    ID | Task ID | Project ID | File Name | Drive File ID | View URL |
@@ -16,7 +19,7 @@
 // =============================================================================
 
 var ATTACH_FOLDER_NAME = 'SI_ProjectTracker_Attachments';
-var ATTACH_MAX_BYTES   = 5 * 1024 * 1024;   // 5 MB
+var ATTACH_MAX_BYTES   = 25 * 1024 * 1024;   // 25 MB
 
 var ATTACH_COL = {
   ID           : 0,
@@ -114,13 +117,24 @@ function addAttachment(taskId, projectId, fileName, fileDataBase64, mimeType) {
     }
 
     if (blob.getBytes().length > ATTACH_MAX_BYTES) {
-      return { success: false, error: 'File exceeds the 5 MB limit.' };
+      return { success: false, error: 'File exceeds the 25 MB limit.' };
     }
 
-    // Upload to Drive
-    var folder   = _getOrCreateAttachmentFolder_();
-    var driveFile = folder.createFile(blob);
+    // Upload to Drive (created in owner's root first)
+    var driveFile = DriveApp.createFile(blob);
     driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    // Transfer ownership to the uploader so the file uses THEIR storage quota.
+    // File ID and view URL are unaffected by ownership transfer.
+    // Falls back silently if transfer is blocked by domain admin policy.
+    if (user.email && user.email.indexOf('@') !== -1) {
+      try {
+        driveFile.setOwner(user.email);
+        Logger.log('addAttachment: ownership of "' + fileName + '" transferred to ' + user.email);
+      } catch (ownerErr) {
+        Logger.log('addAttachment: setOwner failed for ' + user.email + ' — file stays with owner. ' + ownerErr.message);
+      }
+    }
 
     var attachId = 'ATT_' + new Date().getTime();
     var viewUrl  = driveFile.getUrl();

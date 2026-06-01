@@ -1579,6 +1579,18 @@ function openTaskModal(taskId, projId) {
   var fileInp = document.getElementById('taskFileInput');
   if (fileInp) fileInp.value = '';
 
+  // Populate the attachment approver dropdown with all team members
+  var attachApproverEl = document.getElementById('attachApprover');
+  if (attachApproverEl) {
+    var currentApprover = (t && t.taskApprover) ? t.taskApprover : '';
+    var opts = '<option value="">— Reviewer: project lead —</option>';
+    for (var ai = 0; ai < allTeams.length; ai++) {
+      var selected = (allTeams[ai].name === currentApprover) ? ' selected' : '';
+      opts += '<option value="' + escape(allTeams[ai].name) + '"' + selected + '>' + escape(allTeams[ai].name) + '</option>';
+    }
+    attachApproverEl.innerHTML = opts;
+  }
+
   openModal('taskModal');
 }
 
@@ -1884,27 +1896,40 @@ function uploadTaskAttachment(inputEl) {
   var taskId = document.getElementById('taskId').value;
   if (!taskId) { toast('Save the task first before uploading attachments.', 'warning'); return; }
 
-  if (file.size > 5 * 1024 * 1024) { toast('File exceeds 5 MB limit.', 'error'); return; }
+  if (file.size > 25 * 1024 * 1024) { toast('File exceeds 25 MB limit.', 'error'); return; }
 
   var list = document.getElementById('taskAttachmentsList');
   if (list) list.innerHTML = '<div style="font-size:12px;color:var(--text-3);padding:4px 0"><i class="fas fa-spinner fa-spin"></i> Uploading…</div>';
 
+  // Capture the selected approver before the async read begins
+  var attachApproverEl = document.getElementById('attachApprover');
+  var selectedApprover = attachApproverEl ? attachApproverEl.value : '';
+
   var reader = new FileReader();
   reader.onload = function(e) {
-    var b64 = e.target.result.split(',')[1]; // strip "data:mime;base64,"
+    var b64    = e.target.result.split(',')[1]; // strip "data:mime;base64,"
     var projId = document.getElementById('taskProjectId').value || '';
     runServer('addAttachment', [taskId, projId, file.name, b64, file.type])
       .then(function(r) {
         if (r && r.success) {
           toast('File uploaded: ' + file.name, 'success');
+          // If a specific reviewer was chosen, update the task's approver field silently
+          if (selectedApprover) {
+            runServer('setTaskApprover', [taskId, selectedApprover]).then(function(ar) {
+              if (ar && ar.success) {
+                // Update local allTasks so the stamp icon shows immediately
+                _patchTask_(taskId, { taskApprover: selectedApprover });
+              }
+            }).catch(function() {});
+          }
           loadTaskAttachments(taskId);
         } else {
           toast('Upload failed: ' + (r && r.error || 'Unknown'), 'error');
           loadTaskAttachments(taskId);
         }
       })
-      .catch(function(e) {
-        toast('Upload error: ' + (e && e.message), 'error');
+      .catch(function(err) {
+        toast('Upload error: ' + (err && err.message), 'error');
         loadTaskAttachments(taskId);
       });
   };

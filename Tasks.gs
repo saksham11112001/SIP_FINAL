@@ -135,10 +135,11 @@ function addTask(
     status = _normaliseStatus(status || "In Progress");
     var sheet = getSheet(SHEET_NAMES.TASKS);
     var user = getCurrentUser();
-    if (user.role !== "Admin" && !(user.role === "Team Leader" && _isProjectLeadServer_(projectId, user))) {
+    // Everyone in the project (lead, second person, buddies) can add tasks
+    if (user.role !== "Admin" && !_isProjectMember_(projectId, user)) {
       return {
         success: false,
-        error: "Only an Admin or the project's Team Lead can create tasks.",
+        error: "Only an Admin or a project member can create tasks.",
       };
     }
     var taskId = "TASK_" + new Date().getTime();
@@ -186,10 +187,11 @@ function addTasksBulk(projectId, taskList) {
     clearCache([CACHE_KEYS.TASKS]);
     var sheet = getSheet(SHEET_NAMES.TASKS);
     var user = getCurrentUser();
-    if (user.role !== "Admin" && !(user.role === "Team Leader" && _isProjectLeadServer_(projectId, user))) {
+    // Everyone in the project can bulk-add tasks
+    if (user.role !== "Admin" && !_isProjectMember_(projectId, user)) {
       return {
         success: false,
-        error: "Only an Admin or the project's Team Lead can bulk-create tasks.",
+        error: "Only an Admin or a project member can bulk-create tasks.",
       };
     }
     var now = new Date();
@@ -261,12 +263,12 @@ function updateTask(
     var sheet = getSheet(SHEET_NAMES.TASKS);
     var data = sheetValues(sheet);
     var user = getCurrentUser();
-    // Full edit requires Admin or the project's designated Team Lead.
-    // Members who are only assigned to the task use updateTaskStatus() for status-only changes.
-    if (user.role !== "Admin" && !(user.role === "Team Leader" && _isProjectLeadServer_(projectId, user))) {
+    // Full edit: Admin, Project Lead, or Second Person (first in teamMembers).
+    // Buddies and other assignees use updateTaskStatus() for status-only changes.
+    if (user.role !== "Admin" && !_isProjectLeadServer_(projectId, user) && !_isProjectSecondPerson_(projectId, user)) {
       return {
         success: false,
-        error: "Only an Admin or the project's Team Lead can fully edit tasks.",
+        error: "Only an Admin, the project lead, or second person can fully edit tasks.",
       };
     }
 
@@ -532,17 +534,18 @@ function reassignTask(taskId, newAssignee) {
       var currAssignee = String(data[i][TASK_COL.ASSIGNED_TO] || '');
       var taskProjId   = String(data[i][TASK_COL.PROJECT_ID]  || '');
 
-      var isAdmin      = user.role === 'Admin';
-      var isProjLead   = _isProjectLeadServer_(taskProjId, user);
+      var isAdmin        = user.role === 'Admin';
+      var isProjLead     = _isProjectLeadServer_(taskProjId, user);
+      var isSecondPerson = _isProjectSecondPerson_(taskProjId, user);
       // Match by name OR email (assignee is stored as name in most cases)
       var isAssignee   =
         currAssignee.trim().toLowerCase() === (user.name  || '').trim().toLowerCase() ||
         currAssignee.trim().toLowerCase() === (user.email || '').trim().toLowerCase();
 
-      if (!isAdmin && !isProjLead && !isAssignee) {
+      if (!isAdmin && !isProjLead && !isSecondPerson && !isAssignee) {
         return {
           success: false,
-          error: 'Only the current assignee, the project\'s Team Lead, or an Admin can reassign this task.'
+          error: 'Only the current assignee, the project lead, second person, or an Admin can reassign this task.'
         };
       }
 
@@ -570,15 +573,16 @@ function deleteTask(id) {
     var sheet = getSheet(SHEET_NAMES.TASKS);
     var data = sheetValues(sheet);
     var user = getCurrentUser();
-    if (user.role !== "Admin") {
-      return { success: false, error: "Only an Admin can delete tasks." };
-    }
     var projectId = "";
 
     for (var i = 1; i < data.length; i++) {
       if (String(data[i][TASK_COL.ID]) !== String(id)) continue;
       var name = String(data[i][TASK_COL.NAME] || "");
       projectId = String(data[i][TASK_COL.PROJECT_ID] || "");
+      // Delete allowed for Admin, Project Lead, or Second Person
+      if (user.role !== "Admin" && !_isProjectLeadServer_(projectId, user) && !_isProjectSecondPerson_(projectId, user)) {
+        return { success: false, error: "Only an Admin, the project lead, or second person can delete tasks." };
+      }
       sheet.deleteRow(i + 1);
       logAudit(user.name, "DELETE_TASK", "Task", id, 'Deleted: "' + name + '"');
       if (projectId) recomputeProjectStatus(projectId);

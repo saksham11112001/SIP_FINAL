@@ -818,7 +818,7 @@ function _revertEdit_(e, reason) {
  * Useful after you add many rows at once.
  */
 function syncTeamEditors() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSpreadsheet();
   var sheet = ss.getSheetByName("Teams");
   if (!sheet) throw new Error('Sheet "Teams" not found.');
 

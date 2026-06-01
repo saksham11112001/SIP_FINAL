@@ -255,9 +255,9 @@ function _getEscalationRecipients_(project, teams, emailMap, excludeEmail) {
     }
   }
 
-  // 2. All Team Leaders in the team roster
+  // 2. All Admins in the team roster
   teams.forEach(function (m) {
-    if (m.role !== "Team Leader") return;
+    if (m.role !== "Admin") return;
     var e = (m.email || "").trim().toLowerCase();
     if (!e || e === excludeEmail || seen[e]) return;
     seen[e] = true;
@@ -357,10 +357,9 @@ function sendDailyReminders() {
         escRecips.forEach(function (member) {
           var recipEmail = (member.email || "").trim().toLowerCase();
           if (!recipEmail) return;
-          // Escalation uses a fixed date '0000-00-00' as the "date" so it only
-          // ever fires ONCE per (task, recipient) combination — not daily.
+          // Escalation uses todayStr so it fires daily until the task is completed.
           if (
-            _alreadySent_(log, task.id, "ESCALATION", recipEmail, "0000-00-00")
+            _alreadySent_(log, task.id, "ESCALATION", recipEmail, todayStr)
           )
             return;
           if (!escalBuckets[recipEmail])
@@ -467,13 +466,12 @@ function sendDailyReminders() {
       try {
         _dispatchEscalationEmail_(b.member, b.tasks, today);
         b.tasks.forEach(function (t) {
-          // Use '0000-00-00' as permanent date so this never fires again for this task
           _logEmailSent_(
             log,
             t.id,
             "ESCALATION",
             email,
-            "0000-00-00",
+            todayStr,
             "Escalated: " + t.projectName + " — " + t.name,
           );
         });
@@ -514,10 +512,10 @@ function sendWeeklySummary() {
     today.setHours(0, 0, 0, 0);
 
     var recipients = teams.filter(function (m) {
-      return m.role === "Team Leader" && m.email;
+      return m.role === "Admin" && m.email;
     });
     if (!recipients.length) {
-      Logger.log("sendWeeklySummary: no team leaders with email.");
+      Logger.log("sendWeeklySummary: no admins with email.");
       return;
     }
     recipients.forEach(function (member) {

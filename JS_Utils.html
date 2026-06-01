@@ -479,8 +479,8 @@ function confirmDelete(message, onConfirm) {
 
 function fmtDate(s) {
   if (!s) return '—';
-  var d = new Date(s);
-  if (isNaN(d)) return s;
+  var d = _parseDate_(s);  // handles DD/MM/YYYY, strips time component
+  if (!d) return String(s).replace(/\s+\d{1,2}:\d{2}.*$/, '').trim() || '—';
   return d.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
 }
 
@@ -492,7 +492,8 @@ function fmtDate(s) {
 // human-readable formats, and is used by every date utility in the frontend.
 function _parseDate_(s) {
   if (!s) return null;
-  s = String(s).trim();
+  // Strip any time component first — Sheets display values can include " 17:00" or " 17:00:00"
+  s = String(s).trim().replace(/\s+\d{1,2}:\d{2}(:\d{2})?(\s*(AM|PM))?$/i, '').trim();
   if (!s) return null;
 
   // 1. Standard parse (ISO "YYYY-MM-DD", "Month D YYYY", M/D/YYYY etc.)

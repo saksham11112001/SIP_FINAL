@@ -29,6 +29,57 @@ var VALID_PROJECT_STATUSES = ["Active", "On Hold", "Completed"];
 //  Checks against PROJ_COL.TEAM_LEAD (stored as email).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Returns true if `user` is the FIRST name in project.teamMembers (Second Person).
+//  Second Person gets the same full-edit access as the Project Lead.
+// ─────────────────────────────────────────────────────────────────────────────
+function _isProjectSecondPerson_(projectId, user) {
+  if (!projectId || !user) return false;
+  try {
+    var projects = getProjects();
+    var userName  = (user.name  || '').trim().toLowerCase();
+    var userEmail = (user.email || '').trim().toLowerCase();
+    for (var i = 0; i < projects.length; i++) {
+      if (String(projects[i].id) !== String(projectId)) continue;
+      var members = (projects[i].teamMembers || '').split(',');
+      if (!members.length) return false;
+      var first = members[0].trim().toLowerCase();
+      return first.length > 0 && (first === userName || first === userEmail);
+    }
+  } catch (e) {
+    Logger.log('_isProjectSecondPerson_ error: ' + e.message);
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Returns true if `user` is ANY member of the project (teamLead OR teamMembers).
+//  Used for "can add tasks" — every project member is allowed.
+// ─────────────────────────────────────────────────────────────────────────────
+function _isProjectMember_(projectId, user) {
+  if (!projectId || !user) return false;
+  try {
+    var projects = getProjects();
+    var userName  = (user.name  || '').trim().toLowerCase();
+    var userEmail = (user.email || '').trim().toLowerCase();
+    for (var i = 0; i < projects.length; i++) {
+      if (String(projects[i].id) !== String(projectId)) continue;
+      var p = projects[i];
+      // teamLead is stored as email
+      if (userEmail && (p.teamLead || '').trim().toLowerCase() === userEmail) return true;
+      // teamMembers is stored as comma-separated names (or emails)
+      var members = (p.teamMembers || '').split(',');
+      for (var j = 0; j < members.length; j++) {
+        var m = members[j].trim().toLowerCase();
+        if (m && (m === userName || m === userEmail)) return true;
+      }
+    }
+  } catch (e) {
+    Logger.log('_isProjectMember_ error: ' + e.message);
+  }
+  return false;
+}
+
 function _isProjectLeadServer_(projectId, user) {
   if (!projectId || !user || !user.email) return false;
   try {

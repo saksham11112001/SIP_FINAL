@@ -100,8 +100,7 @@ function _scheduleQuietRefresh_() {
   // Silently re-fetch tasks 3s after a mutation to reconcile server state.
   // No skeleton loaders — the UI already shows the optimistic update.
   setTimeout(function() {
-    runServer('getTasksPage', [0, _taskLimit]).then(function(pageData) {
-      var tasks = Array.isArray(pageData) ? pageData : (pageData && pageData.tasks || []);
+    runServer('getTasks').then(function(tasks) {
       if (tasks && tasks.length) {
         allTasks = tasks;
         renderProjectsByClient(allProjects, allTasks);
@@ -128,40 +127,23 @@ function loadProjectsPage() {
 
   Promise.all([
     runServer('getProjects'),
-    runServer('getTasksPage', [0, _taskLimit]),
+    runServer('getTasks'),          // load all tasks at once — avoids empty-project flash
     runServer('getClients'),
     runServer('getTeams')
   ]).then(function(results) {
-    allProjects = results[0] || [];
-
-    var pageData = results[1] || {};
-    if (Array.isArray(pageData)) {
-      allTasks     = pageData;
-      _taskTotal   = pageData.length;
-      _taskHasMore = false;
-      _taskOffset  = pageData.length;
-    } else {
-      allTasks     = pageData.tasks   || [];
-      _taskTotal   = pageData.total   || 0;
-      _taskHasMore = pageData.hasMore || false;
-      _taskOffset  = allTasks.length;
-    }
+    allProjects  = results[0] || [];
+    allTasks     = results[1] || [];
+    _taskTotal   = allTasks.length;
+    _taskHasMore = false;
+    _taskOffset  = allTasks.length;
 
     allClients = results[2] || [];
     allTeams   = results[3] || [];
 
-    // Render first batch immediately
     renderProjectsByClient(allProjects, allTasks);
 
-    // Clear any old "load more" button
     var wrap = document.getElementById('loadMoreWrap');
     if (wrap) wrap.innerHTML = '';
-
-    // If there are more pages, start background loading automatically.
-    // Pass the current generation so stale batches from old calls self-abort.
-    if (_taskHasMore) {
-      setTimeout(function() { _bgLoadNextTaskBatch_(_thisGen); }, 300);
-    }
 
   }).catch(function(e) {
     if (container) container.innerHTML = emptyState('fa-circle-exclamation',
@@ -325,6 +307,39 @@ function _isProjectLead(projectId) {
   return false;
 }
 
+// Helper: is the current user the Second Person (first in teamMembers) for a project?
+function _isProjectSecondPerson(projectId) {
+  var myName  = (currentUser.name  || '').trim().toLowerCase();
+  var myEmail = (currentUser.email || '').trim().toLowerCase();
+  if (!myName && !myEmail) return false;
+  for (var i = 0; i < allProjects.length; i++) {
+    if (allProjects[i].id !== projectId) continue;
+    var members = (allProjects[i].teamMembers || '').split(',');
+    if (!members.length) return false;
+    var first = members[0].trim().toLowerCase();
+    return first.length > 0 && (first === myName || first === myEmail);
+  }
+  return false;
+}
+
+// Helper: is the current user ANY member of the project (teamLead or teamMembers)?
+function _isProjectMember(projectId) {
+  var myName  = (currentUser.name  || '').trim().toLowerCase();
+  var myEmail = (currentUser.email || '').trim().toLowerCase();
+  if (!myName && !myEmail) return false;
+  for (var i = 0; i < allProjects.length; i++) {
+    if (allProjects[i].id !== projectId) continue;
+    var p = allProjects[i];
+    if (myEmail && (p.teamLead || '').trim().toLowerCase() === myEmail) return true;
+    var members = (p.teamMembers || '').split(',');
+    for (var j = 0; j < members.length; j++) {
+      var m = members[j].trim().toLowerCase();
+      if (m && (m === myName || m === myEmail)) return true;
+    }
+  }
+  return false;
+}
+
 // Helper: look up a team member's display name from their email
 function _teamLeadDisplayName(email) {
   if (!email) return '';
@@ -410,12 +425,14 @@ function renderProjectGroup(p, tasks, isAdmin) {
     parts.push('</div>');
   }
 
-  if (isAdmin || isProjLead) {
+  var canAddTask = isAdmin || isProjLead || _isProjectMember(p.id);
+  if (canAddTask) {
     parts.push(
       '<div class="task-add-bar" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
-      '<button class="btn btn-ghost btn-sm" style="color:var(--blue);border-color:var(--blue);opacity:.85" onclick="openTemplateModal(\'' + pid + '\')">' +
-        '<i class="fas fa-wand-magic-sparkles"></i> Task Templates' +
-      '</button>' +
+      (isAdmin || isProjLead || _isProjectSecondPerson(p.id) ?
+        '<button class="btn btn-ghost btn-sm" style="color:var(--blue);border-color:var(--blue);opacity:.85" onclick="openTemplateModal(\'' + pid + '\')">' +
+          '<i class="fas fa-wand-magic-sparkles"></i> Task Templates' +
+        '</button>' : '') +
       '<button class="btn btn-outline btn-sm" onclick="openTaskModal(null,\'' + pid + '\')"><i class="fas fa-plus"></i> Add Task</button>' +
       '</div>'
     );
@@ -428,11 +445,12 @@ function renderProjectGroup(p, tasks, isAdmin) {
 function renderTaskCard(t, isAdmin, projectOnHold) {
   var ov      = isOverdue(t.dueDate, t.status);
   var priCls  = (t.priority||'medium').toLowerCase();
-  var myTask  = currentUser.name === t.assignedTo || currentUser.email === t.assignedTo;
-  var isLead  = _isProjectLead(t.projectId);
-  // Full edit (open modal with all fields): Admin or this project's lead.
-  // Status-only edit (open modal in read-only mode): also the assigned member (myTask).
-  var canEdit = isAdmin || isLead || myTask;
+  var myTask        = currentUser.name === t.assignedTo || currentUser.email === t.assignedTo;
+  var isLead        = _isProjectLead(t.projectId);
+  var isSecondPerson = _isProjectSecondPerson(t.projectId);
+  // Full edit: Admin, project lead, or second person (first in teamMembers).
+  // Status-only edit: the assigned member (myTask).
+  var canEdit = isAdmin || isLead || isSecondPerson || myTask;
   var tid     = escape(t.id);
 
   // Determine who is the effective approver for this task
@@ -493,7 +511,7 @@ function renderTaskCard(t, isAdmin, projectOnHold) {
     parts.push('<button class="act-btn act-btn-approve" onclick="openApprovalModal(\'' + tid + '\')" title="' + approveTitle + '"><i class="fas fa-gavel"></i></button>');
   }
 
-  if (isAdmin) {
+  if (isAdmin || isLead || isSecondPerson) {
     parts.push('<button class="act-btn act-btn-delete" onclick="deleteTaskConfirm(\'' + tid + '\',\'' + escape(t.name).replace(/'/g,"\\'") + '\')" title="Delete task"><i class="fas fa-trash"></i></button>');
   }
 
@@ -1493,12 +1511,12 @@ function openTaskModal(taskId, projId) {
   var effectiveProjId = (t && t.projectId) || projId || '';
 
   // ── Permission ────────────────────────────────────────────────────────────────
-  // Admin: always full edit.
-  // Team Leader who IS the project lead: full edit.
-  // Team Leader who is only a member / Team Member: status-only.
+  // Full edit: Admin, Project Lead, or Second Person (first in teamMembers).
+  // New task creation: extended to any project member (buddy can add tasks).
+  // Status-only edit: buddies editing their own existing tasks.
   var isAdmin      = currentUser.role === 'Admin';
-  var isTeamLeader = currentUser.role === 'Team Leader';
-  var canFullEdit  = isAdmin || (isTeamLeader && _isProjectLead(effectiveProjId));
+  var canFullEdit  = isAdmin || _isProjectLead(effectiveProjId) || _isProjectSecondPerson(effectiveProjId) ||
+                     (!isEdit && _isProjectMember(effectiveProjId));
 
   document.getElementById('taskModalTitle').textContent = isEdit ? 'Edit Task' : 'New Task';
   document.getElementById('taskId').value        = taskId || '';
@@ -1568,7 +1586,9 @@ function saveTask() {
   var id          = document.getElementById('taskId').value;
   var projId      = document.getElementById('taskProjectId').value;
   var canFullEdit = currentUser.role === 'Admin' ||
-    (currentUser.role === 'Team Leader' && _isProjectLead(projId));
+    _isProjectLead(projId) ||
+    _isProjectSecondPerson(projId) ||
+    (!id && _isProjectMember(projId)); // new task: any project member can create
   var fn, args;
 
   if (canFullEdit) {
@@ -1602,7 +1622,7 @@ function saveTask() {
     if (r && r.success) {
       toast(id ? 'Task updated' : 'Task created', 'success');
       if (fn === 'addTask') {
-        _addTaskLocally_(r.id || ('t_' + Date.now()), projId, {
+        _addTaskLocally_(r.taskId || r.id || ('t_' + Date.now()), projId, {
           name: name, assignedTo: assigned, dueDate: due,
           status: status, priority: priority, notes: notes,
           frequency: freq, dayOfWeek: dow, taskApprover: taskApprover

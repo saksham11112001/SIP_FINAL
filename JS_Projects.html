@@ -363,6 +363,17 @@ function renderProjectGroup(p, tasks, isAdmin) {
     if (tasks[i].status === 'Completed' && tasks[i].approvalStatus === 'Approved') done++;
     if (tasks[i].approvalStatus === 'Pending TL') pending++;
   }
+
+  // Sort: High → Medium → Low; Ongoing tasks always at the bottom
+  var _PRIO = { 'High': 0, 'Medium': 1, 'Low': 2 };
+  pTasks.sort(function(a, b) {
+    var aOng = (a.frequency || '') === 'Ongoing';
+    var bOng = (b.frequency || '') === 'Ongoing';
+    if (aOng !== bOng) return aOng ? 1 : -1;          // Ongoing sinks to bottom
+    var pa = _PRIO[a.priority] !== undefined ? _PRIO[a.priority] : 1;
+    var pb = _PRIO[b.priority] !== undefined ? _PRIO[b.priority] : 1;
+    return pa - pb;
+  });
   var total   = pTasks.length;
   var pct     = total > 0 ? Math.round((done/total)*100) : 0;
   var progCls = pct >= 80 ? 'prog-green' : pct >= 40 ? 'prog-amber' : 'prog-red';
@@ -419,7 +430,20 @@ function renderProjectGroup(p, tasks, isAdmin) {
     parts.push('<div style="padding:14px 16px;color:var(--text-3);font-size:13px;text-align:center;font-style:italic">No tasks yet.</div>');
   } else {
     parts.push('<div class="task-list">');
+    var shownOngoingDivider = false;
     for (var ti = 0; ti < pTasks.length; ti++) {
+      // Insert a visual divider before the first Ongoing task
+      if (!shownOngoingDivider && (pTasks[ti].frequency || '') === 'Ongoing') {
+        shownOngoingDivider = true;
+        parts.push(
+          '<div style="display:flex;align-items:center;gap:8px;padding:6px 12px 2px;opacity:.7">' +
+          '<span style="flex:1;height:1px;background:var(--border)"></span>' +
+          '<span style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--green);white-space:nowrap">' +
+          '<i class="fas fa-infinity" style="margin-right:4px"></i>Ongoing Tasks</span>' +
+          '<span style="flex:1;height:1px;background:var(--border)"></span>' +
+          '</div>'
+        );
+      }
       parts.push(renderTaskCard(pTasks[ti], isAdmin, onHold));
     }
     parts.push('</div>');
@@ -443,7 +467,8 @@ function renderProjectGroup(p, tasks, isAdmin) {
 }
 
 function renderTaskCard(t, isAdmin, projectOnHold) {
-  var ov      = isOverdue(t.dueDate, t.status);
+  var isOngoing = (t.frequency || '') === 'Ongoing';
+  var ov      = !isOngoing && isOverdue(t.dueDate, t.status);  // Ongoing tasks never show overdue
   var priCls  = (t.priority||'medium').toLowerCase();
   var myTask        = currentUser.name === t.assignedTo || currentUser.email === t.assignedTo;
   var isLead        = _isProjectLead(t.projectId);
@@ -473,6 +498,7 @@ function renderTaskCard(t, isAdmin, projectOnHold) {
     '<div class="task-card-name' + (ov?' overdue-name':'') + '">',
     '<span class="priority-dot ' + priCls + '"></span>',
     escape(t.name),
+    isOngoing ? ' <span class="badge badge-ongoing" style="font-size:10px"><i class="fas fa-infinity"></i> Ongoing</span>' : '',
     t.approvalStatus ? ' ' + approvalBadge(apprLabel) : '',
     ov ? ' <span class="badge badge-overdue" style="font-size:10px"><i class="fas fa-triangle-exclamation"></i> Overdue</span>' : '',
     '</div>',
@@ -482,7 +508,7 @@ function renderTaskCard(t, isAdmin, projectOnHold) {
     hasDesignatedApprover
       ? '<span title="Approver: ' + escape(t.taskApprover) + '"><i class="fas fa-stamp" style="color:var(--purple)"></i> ' + escape(t.taskApprover) + '</span>'
       : '',
-    t.dueDate ? '<span>' + dueDaysLabel(t.dueDate, t.status) + '</span>' : '',
+    (!isOngoing && t.dueDate) ? '<span>' + dueDaysLabel(t.dueDate, t.status) + '</span>' : '',
     '<span>' + statusBadge(t.status) + '</span>',
     '<span>' + priorityBadge(t.priority) + '</span>',
     t.notes ? '<span title="' + escape(t.notes) + '"><i class="fas fa-note-sticky" style="color:var(--amber)"></i></span>' : '',

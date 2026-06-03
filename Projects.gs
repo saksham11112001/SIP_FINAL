@@ -525,12 +525,14 @@ function recomputeProjectStatus(projectId) {
     var taskData = sheetValues(getSheet(SHEET_NAMES.TASKS));
     var projTasks = [];
     for (var j = 1; j < taskData.length; j++) {
-      if (String(taskData[j][TASK_COL.PROJECT_ID]) === String(projectId)) {
-        projTasks.push({
-          status: String(taskData[j][TASK_COL.STATUS] || ""),
-          approvalStatus: String(taskData[j][TASK_COL.APPROVAL_STATUS] || ""),
-        });
-      }
+      if (String(taskData[j][TASK_COL.PROJECT_ID]) !== String(projectId)) continue;
+      // Ongoing tasks run for the life of the project — exclude from completion check
+      var freq = _normaliseFrequency(String(taskData[j][TASK_COL.FREQUENCY] || ""));
+      if (freq === "Ongoing") continue;
+      projTasks.push({
+        status: String(taskData[j][TASK_COL.STATUS] || ""),
+        approvalStatus: String(taskData[j][TASK_COL.APPROVAL_STATUS] || ""),
+      });
     }
 
     if (projTasks.length === 0) return;

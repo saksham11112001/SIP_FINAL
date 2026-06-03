@@ -842,8 +842,30 @@
                 <div class="ms-wrap" id="ms-taskAssignedTo"></div>
               </div>
               <div class="form-field">
+                <label>Task Type</label>
+                <select id="taskFrequency" onchange="onFrequencyChange()">
+                  <option value="One Time">One Time</option>
+                  <option value="Ongoing">Ongoing (no deadline)</option>
+                  <option value="Daily">Daily</option>
+                  <option value="Alternate Days">Alternate Days</option>
+                  <option value="Weekly">Weekly</option>
+                </select>
+              </div>
+              <div class="form-field" id="dueDateRow">
                 <label>Due Date</label>
                 <input type="date" id="taskDueDate" />
+              </div>
+              <div class="form-field" id="dayOfWeekRow" style="display:none;">
+                <label>Day of Week</label>
+                <select id="taskDayOfWeek">
+                  <option value="Mon">Monday</option>
+                  <option value="Tue">Tuesday</option>
+                  <option value="Wed">Wednesday</option>
+                  <option value="Thu">Thursday</option>
+                  <option value="Fri">Friday</option>
+                  <option value="Sat">Saturday</option>
+                  <option value="Sun">Sunday</option>
+                </select>
               </div>
               <div class="form-field">
                 <label>Priority</label>

@@ -24,7 +24,7 @@ function _normaliseStatus(s) {
 
 function _normaliseFrequency(s) {
   s = String(s || "").trim();
-  if (s === "Daily" || s === "Alternate Days" || s === "Weekly") return s;
+  if (s === "Daily" || s === "Alternate Days" || s === "Weekly" || s === "Ongoing") return s;
   return "One Time";
 }
 

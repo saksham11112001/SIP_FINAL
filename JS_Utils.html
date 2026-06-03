@@ -663,9 +663,8 @@ function _msBuildHTML(id) {
   }
   var placeholder = sel.length === 0
     ? '<span class="ms-placeholder">' + escape(s.placeholder) + '</span>' : '';
-  var searchInput = s.single && sel.length > 0
-    ? ''
-    : '<input class="ms-search" id="' + id + '_search" type="text" placeholder="" autocomplete="off" oninput="msFilter(\'' + id + '\')" onclick="event.stopPropagation()">';
+  // Always show search input — even in single-select after a value is chosen
+  var searchInput = '<input class="ms-search" id="' + id + '_search" type="text" placeholder="Type to search…" autocomplete="off" oninput="msFilter(\'' + id + '\')" onfocus="msOpen(\'' + id + '\')" onclick="event.stopPropagation()">';
   var boxHtml = '<div class="ms-box" id="' + id + '_box" onclick="msToggle(\'' + id + '\')">' + chipsHtml + placeholder + searchInput + '</div>';
   var optsHtml = '';
   for (var j = 0; j < s.items.length; j++) {
@@ -696,6 +695,13 @@ function msToggle(id) {
     var search = document.getElementById(id + '_search');
     if (search) { search.value = ''; msFilter(id); search.focus(); }
   }
+}
+
+function msOpen(id) {
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  document.querySelectorAll('.ms-wrap.open').forEach(function(w) { if (w.id !== id) w.classList.remove('open'); });
+  wrap.classList.add('open');
 }
 
 function msClose(id) {

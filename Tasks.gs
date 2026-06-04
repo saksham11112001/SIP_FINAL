@@ -59,6 +59,7 @@ function getTasks() {
           frequency: r[TASK_COL.FREQUENCY] || "One Time",
           dayOfWeek: r[TASK_COL.DAY_OF_WEEK] || "",
           taskApprover: r[TASK_COL.TASK_APPROVER] || "",
+          skipApproval: r[TASK_COL.SKIP_APPROVAL] === 'true' || r[TASK_COL.SKIP_APPROVAL] === true,
         });
       }
       return tasks;
@@ -129,6 +130,7 @@ function addTask(
   frequency,
   dayOfWeek,
   taskApprover,
+  skipApproval,
 ) {
   try {
     clearCache([CACHE_KEYS.TASKS]);
@@ -143,12 +145,12 @@ function addTask(
       };
     }
     var taskId = "TASK_" + new Date().getTime();
-    // New completed task goes to TL stage first
-    var approval = status === "Completed" ? "Pending TL" : "";
+    var skipApprovalBool = !!skipApproval;
+    // If skipApproval is set, completed tasks go directly to Approved; otherwise Pending TL
+    var approval = status === "Completed" ? (skipApprovalBool ? "Approved" : "Pending TL") : "";
 
     var freq = (frequency || "One Time").trim() || "One Time";
     var dow = freq === "Weekly" ? dayOfWeek || "" : "";
-    // Non-recurring tasks clear due date only if explicitly blank
     sheet.appendRow([
       taskId,
       projectId,
@@ -168,6 +170,7 @@ function addTask(
       freq,
       dow,
       taskApprover || "",
+      skipApprovalBool ? "true" : "",   // col 19: Skip Approval
     ]);
     logAudit(
       user.name,
@@ -223,6 +226,7 @@ function addTasksBulk(projectId, taskList) {
         tFreq,
         tDow,
         "",   // taskApprover: blank = use project lead
+        "",   // skipApproval: false by default for bulk-created tasks
       ]);
       ids.push(taskId);
     }
@@ -255,6 +259,7 @@ function updateTask(
   frequency,
   dayOfWeek,
   taskApprover,
+  skipApproval,
 ) {
   try {
     clearCache([CACHE_KEYS.TASKS, CACHE_KEYS.PROJECTS]);
@@ -283,9 +288,10 @@ function updateTask(
       var prevApprDate = data[i][TASK_COL.APPROVED_DATE] || "";
       var prevCompDate = data[i][TASK_COL.COMPLETED_DATE] || "";
 
+      var skipApprovalBool = !!skipApproval;
       var newApproval = prevApproval;
       if (status === "Completed" && prevStatus !== "Completed") {
-        newApproval = "Pending TL";
+        newApproval = skipApprovalBool ? "Approved" : "Pending TL";
       } else if (status !== "Completed") {
         newApproval = "";
       }
@@ -318,7 +324,7 @@ function updateTask(
       sheet
         .getRange(row, 12, 1, 4)
         .setValues([[newApproval, newRemarks, newApprBy, newApprDate]]);
-      sheet.getRange(row, 16, 1, 3).setValues([[updFreq, updDow, taskApprover || ""]]);
+      sheet.getRange(row, 16, 1, 4).setValues([[updFreq, updDow, taskApprover || "", skipApprovalBool ? "true" : ""]]);
 
       recomputeProjectStatus(String(data[i][TASK_COL.PROJECT_ID] || projectId));
       logAudit(
@@ -340,7 +346,7 @@ function updateTask(
 //  UPDATE STATUS ONLY  (Staff for own tasks)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function updateTaskStatus(id, status, notes) {
+function updateTaskStatus(id, status, notes, skipApprovalParam) {
   try {
     clearCache([CACHE_KEYS.TASKS, CACHE_KEYS.PROJECTS]);
     status = _normaliseStatus(status);
@@ -356,8 +362,12 @@ function updateTaskStatus(id, status, notes) {
       var prevStatus = _normaliseStatus(data[i][TASK_COL.STATUS]);
       var approval = String(data[i][TASK_COL.APPROVAL_STATUS] || "");
 
+      // Skip approval if: stored on task (created with flag) OR passed at submission time
+      var storedSkip = data[i][TASK_COL.SKIP_APPROVAL] === 'true' || data[i][TASK_COL.SKIP_APPROVAL] === true;
+      var finalSkip  = storedSkip || !!skipApprovalParam;
+
       if (status === "Completed" && prevStatus !== "Completed") {
-        approval = "Pending TL";
+        approval = finalSkip ? "Approved" : "Pending TL";
       } else if (status !== "Completed") {
         approval = "";
       }

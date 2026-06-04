@@ -53,12 +53,18 @@ function isAdmin() {
 // A quiet background sync runs after 3s to reconcile server state.
 
 function quickCompleteTask(taskId, taskName) {
+  // Check if the task was created with "no approval required"
+  var task = null;
+  for (var _qi = 0; _qi < allTasks.length; _qi++) {
+    if (allTasks[_qi].id === taskId) { task = allTasks[_qi]; break; }
+  }
+  var skipApproval = !!(task && task.skipApproval);
   showLoading('Marking complete…');
-  runServer('updateTaskStatus', [taskId, 'Completed', '']).then(function(r) {
+  runServer('updateTaskStatus', [taskId, 'Completed', '', skipApproval]).then(function(r) {
     hideLoading();
     if (r && r.success) {
       toast('"' + taskName + '" marked as completed', 'success');
-      _patchTask_(taskId, { status: 'Completed', approvalStatus: 'Pending TL' });
+      _patchTask_(taskId, { status: 'Completed', approvalStatus: skipApproval ? 'Approved' : 'Pending TL' });
       _scheduleQuietRefresh_();
     } else {
       toast('Error: ' + (r && r.error || 'Unknown'), 'error');
@@ -78,6 +84,7 @@ function _patchTask_(taskId, changes) {
 }
 
 function _addTaskLocally_(taskId, projId, data) {
+  var skip = !!data.skipApproval;
   allTasks.push({
     id: taskId, projectId: projId,
     name: data.name || '', assignedTo: data.assignedTo || '',
@@ -85,7 +92,8 @@ function _addTaskLocally_(taskId, projId, data) {
     priority: data.priority || 'Medium', notes: data.notes || '',
     frequency: data.frequency || 'One Time', dayOfWeek: data.dayOfWeek || '',
     taskApprover: data.taskApprover || '',
-    approvalStatus: data.status === 'Completed' ? 'Pending TL' : '',
+    skipApproval: skip,
+    approvalStatus: data.status === 'Completed' ? (skip ? 'Approved' : 'Pending TL') : '',
     approvalRemarks: '', approvedBy: '', approvedDate: '', completedDate: '',
   });
   renderProjectsByClient(allProjects, allTasks);
@@ -295,6 +303,17 @@ function renderClientGroup(client, projects, tasks, isAdmin) {
   return parts.join('');
 }
 
+// Tracks which projects have their completed section expanded (default: collapsed)
+var _doneOpen = {};
+
+function toggleDoneSection(projectId) {
+  _doneOpen[projectId] = !_doneOpen[projectId];
+  var body = document.getElementById('done-body-' + projectId);
+  var chev = document.getElementById('done-chev-' + projectId);
+  if (body) body.style.display = _doneOpen[projectId] ? '' : 'none';
+  if (chev) chev.className = 'fas fa-chevron-' + (_doneOpen[projectId] ? 'up' : 'down');
+}
+
 // Helper: is the current user the project lead for a given projectId?
 function _isProjectLead(projectId) {
   var myEmail = (currentUser.email || '').trim().toLowerCase();
@@ -364,15 +383,24 @@ function renderProjectGroup(p, tasks, isAdmin) {
     if (tasks[i].approvalStatus === 'Pending TL') pending++;
   }
 
-  // Sort: High → Medium → Low; Ongoing tasks always at the bottom
+  // Sort into 3 groups: Active (0) → Ongoing (1) → Completed (2)
+  // Within Active group sort by priority: High (0) > Medium (1) > Low (2)
   var _PRIO = { 'High': 0, 'Medium': 1, 'Low': 2 };
   pTasks.sort(function(a, b) {
-    var aOng = (a.frequency || '') === 'Ongoing';
-    var bOng = (b.frequency || '') === 'Ongoing';
-    if (aOng !== bOng) return aOng ? 1 : -1;          // Ongoing sinks to bottom
-    var pa = _PRIO[a.priority] !== undefined ? _PRIO[a.priority] : 1;
-    var pb = _PRIO[b.priority] !== undefined ? _PRIO[b.priority] : 1;
-    return pa - pb;
+    var aDone = a.status === 'Completed' && a.approvalStatus === 'Approved';
+    var bDone = b.status === 'Completed' && b.approvalStatus === 'Approved';
+    var aOng  = !aDone && (a.frequency || '') === 'Ongoing';
+    var bOng  = !bDone && (b.frequency || '') === 'Ongoing';
+    var aGrp  = aDone ? 2 : (aOng ? 1 : 0);
+    var bGrp  = bDone ? 2 : (bOng ? 1 : 0);
+    if (aGrp !== bGrp) return aGrp - bGrp;
+    // Within active group, sort by priority
+    if (aGrp === 0) {
+      var pa = _PRIO[a.priority] !== undefined ? _PRIO[a.priority] : 1;
+      var pb = _PRIO[b.priority] !== undefined ? _PRIO[b.priority] : 1;
+      return pa - pb;
+    }
+    return 0;
   });
   var total   = pTasks.length;
   var pct     = total > 0 ? Math.round((done/total)*100) : 0;
@@ -430,10 +458,16 @@ function renderProjectGroup(p, tasks, isAdmin) {
     parts.push('<div style="padding:14px 16px;color:var(--text-3);font-size:13px;text-align:center;font-style:italic">No tasks yet.</div>');
   } else {
     parts.push('<div class="task-list">');
-    var shownOngoingDivider = false;
+    var shownOngoingDivider   = false;
+    var shownCompletedDivider = false;
+    var completedCount = pTasks.filter(function(t){ return t.status === 'Completed' && t.approvalStatus === 'Approved'; }).length;
+    var doneOpen = !!_doneOpen[p.id];  // default collapsed
+
     for (var ti = 0; ti < pTasks.length; ti++) {
-      // Insert a visual divider before the first Ongoing task
-      if (!shownOngoingDivider && (pTasks[ti].frequency || '') === 'Ongoing') {
+      var tsk = pTasks[ti];
+
+      // ── Ongoing divider ───────────────────────────────────────────────────
+      if (!shownOngoingDivider && (tsk.frequency || '') === 'Ongoing' && tsk.status !== 'Completed') {
         shownOngoingDivider = true;
         parts.push(
           '<div style="display:flex;align-items:center;gap:8px;padding:6px 12px 2px;opacity:.7">' +
@@ -444,8 +478,27 @@ function renderProjectGroup(p, tasks, isAdmin) {
           '</div>'
         );
       }
-      parts.push(renderTaskCard(pTasks[ti], isAdmin, onHold));
+
+      // ── Completed divider (collapsible) — only fully approved tasks ──────
+      if (!shownCompletedDivider && tsk.status === 'Completed' && tsk.approvalStatus === 'Approved') {
+        shownCompletedDivider = true;
+        parts.push(
+          '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px 2px;cursor:pointer;" onclick="toggleDoneSection(\'' + escape(p.id) + '\')" id="done-hdr-' + escape(p.id) + '">' +
+          '<span style="flex:1;height:1px;background:var(--border)"></span>' +
+          '<span style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text-3);white-space:nowrap;display:flex;align-items:center;gap:5px;">' +
+          '<i class="fas fa-circle-check" style="color:var(--green)"></i> Completed (' + completedCount + ')' +
+          '<i class="fas fa-chevron-' + (doneOpen ? 'up' : 'down') + '" id="done-chev-' + escape(p.id) + '" style="font-size:9px"></i>' +
+          '</span>' +
+          '<span style="flex:1;height:1px;background:var(--border)"></span>' +
+          '</div>' +
+          '<div id="done-body-' + escape(p.id) + '" style="' + (doneOpen ? '' : 'display:none') + '">'
+        );
+      }
+
+      parts.push(renderTaskCard(tsk, isAdmin, onHold));
     }
+    // Close the done-body div if it was opened
+    if (shownCompletedDivider) parts.push('</div>');
     parts.push('</div>');
   }
 
@@ -492,10 +545,11 @@ function renderTaskCard(t, isAdmin, projectOnHold) {
   var apprLabel = t.approvalStatus;
   if (apprLabel === 'Pending TL') apprLabel = 'Pending Review';
 
+  var isDone  = t.status === 'Completed' && t.approvalStatus === 'Approved';
   var parts = [
-    '<div class="task-card ' + priCls + '">',
+    '<div class="task-card ' + priCls + (isDone ? ' task-done' : '') + '">',
     '<div class="task-card-main">',
-    '<div class="task-card-name' + (ov?' overdue-name':'') + '">',
+    '<div class="task-card-name' + (ov?' overdue-name':'') + (isDone?' task-done-name':'') + '">',
     '<span class="priority-dot ' + priCls + '"></span>',
     escape(t.name),
     isOngoing ? ' <span class="badge badge-ongoing" style="font-size:10px"><i class="fas fa-infinity"></i> Ongoing</span>' : '',
@@ -1574,10 +1628,18 @@ function openTaskModal(taskId, projId) {
       if (dwEdit && t.dayOfWeek) dwEdit.value = t.dayOfWeek;
       // Override approver select with saved value (or empty = use project lead)
       _populateTaskApproverSelect_(t.projectId, t.taskApprover || '');
+      // Pre-fill skip approval checkbox
+      var skipChk = document.getElementById('taskSkipApproval');
+      if (skipChk) skipChk.checked = !!(t.skipApproval);
     } else {
       document.getElementById('taskNameReadonly').value = t.name   || '';
       document.getElementById('taskStatusOnly').value   = t.status || 'In Progress';
       document.getElementById('taskNotesOnly').value    = t.notes  || '';
+      // Show skip-approval checkbox only if task does NOT already have skipApproval baked in
+      var skipRow = document.getElementById('skipApprovalOnlyRow');
+      var skipOnlyChk = document.getElementById('taskSkipApprovalOnly');
+      if (skipRow) skipRow.style.display = t.skipApproval ? 'none' : '';
+      if (skipOnlyChk) skipOnlyChk.checked = false;
     }
   } else {
     // New task — pre-fill due date to today + 7 days
@@ -1588,9 +1650,11 @@ function openTaskModal(taskId, projId) {
       document.getElementById('taskStatus').value   = 'In Progress';
       // New task: approver dropdown already populated above with no selection (= use project lead)
     }
-    // Reset frequency for new task
+    // Reset frequency and skip-approval for new task
     var fqEl = document.getElementById('taskFrequency');
     if (fqEl) { fqEl.value = 'One Time'; onFrequencyChange(); }
+    var skipChkNew = document.getElementById('taskSkipApproval');
+    if (skipChkNew) skipChkNew.checked = false;
   }
 
   // Attachments: show only when editing existing task
@@ -1641,15 +1705,17 @@ function saveTask() {
     var dow          = freq === 'Weekly' ? ((document.getElementById('taskDayOfWeek') || {value:'Mon'}).value || 'Mon') : '';
     if (freq === 'Weekly' && !dow) { toast('Please select a day of the week.','warning'); return; }
     var taskApprover = getMultiSelectValues('ms-taskApprover')[0] || '';
+    var skipApproval = !!(document.getElementById('taskSkipApproval') || {}).checked;
     fn   = id ? 'updateTask' : 'addTask';
-    args = id ? [id, projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover]
-              : [projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover];
+    args = id ? [id, projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover, skipApproval]
+              : [projId, name, assigned, due, status, priority, notes, freq, dow, taskApprover, skipApproval];
   } else {
     var status2 = document.getElementById('taskStatusOnly').value;
     var notes2  = document.getElementById('taskNotesOnly').value.trim();
     if (!id) { toast('Cannot create tasks as a staff member.','warning'); return; }
+    var skipApproval2 = !!(document.getElementById('taskSkipApprovalOnly') || {}).checked;
     fn   = 'updateTaskStatus';
-    args = [id, status2, notes2];
+    args = [id, status2, notes2, skipApproval2];
   }
 
   showLoading(id ? 'Saving task…' : 'Creating task…');
@@ -1663,17 +1729,20 @@ function saveTask() {
         _addTaskLocally_(r.taskId || r.id || ('t_' + Date.now()), projId, {
           name: name, assignedTo: assigned, dueDate: due,
           status: status, priority: priority, notes: notes,
-          frequency: freq, dayOfWeek: dow, taskApprover: taskApprover
+          frequency: freq, dayOfWeek: dow, taskApprover: taskApprover,
+          skipApproval: skipApproval
         });
       } else if (fn === 'updateTask') {
         _patchTask_(id, {
           name: name, assignedTo: assigned, dueDate: due,
           status: status, priority: priority, notes: notes,
-          frequency: freq, dayOfWeek: dow, taskApprover: taskApprover
+          frequency: freq, dayOfWeek: dow, taskApprover: taskApprover,
+          skipApproval: skipApproval
         });
       } else {
         // updateTaskStatus (staff member path)
-        _patchTask_(id, { status: status2, notes: notes2 });
+        var newApprSt = status2 === 'Completed' ? (skipApproval2 ? 'Approved' : 'Pending TL') : '';
+        _patchTask_(id, { status: status2, notes: notes2, approvalStatus: newApprSt });
       }
       _scheduleQuietRefresh_();
     } else {

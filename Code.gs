@@ -56,6 +56,7 @@ var TASK_COL = {
   FREQUENCY: 15,
   DAY_OF_WEEK: 16,
   TASK_APPROVER: 17,   // name of the designated approver; empty = use project lead
+  SKIP_APPROVAL: 18,   // 'true' = task completes directly without Pending TL stage
 };
 
 var PROJ_COL = {
@@ -176,6 +177,7 @@ function setupSheets() {
     if (tcols < 16) ts.getRange(1, 16).setValue("Frequency");
     if (tcols < 17) ts.getRange(1, 17).setValue("Day Of Week");
     if (tcols < 18) ts.getRange(1, 18).setValue("Task Approver");
+    if (tcols < 19) ts.getRange(1, 19).setValue("Skip Approval");
   }
 
   _ensureSheet(ss, SHEET_NAMES.CLIENTS, [

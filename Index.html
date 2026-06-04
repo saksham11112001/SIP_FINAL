@@ -902,6 +902,12 @@
                   placeholder="Any additional context, requirements, or instructions…"
                 ></textarea>
               </div>
+              <div class="form-field span-2">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
+                  <input type="checkbox" id="taskSkipApproval" style="width:15px;height:15px;accent-color:var(--blue);cursor:pointer;">
+                  <span>No approval required — task completes directly</span>
+                </label>
+              </div>
             </div>
           </div>
 
@@ -938,6 +944,13 @@
                   rows="3"
                   placeholder="Describe what you've done, any blockers, or questions…"
                 ></textarea>
+              </div>
+              <!-- Shown only when task was not created with "skip approval" -->
+              <div class="form-field span-2" id="skipApprovalOnlyRow" style="display:none;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
+                  <input type="checkbox" id="taskSkipApprovalOnly" style="width:15px;height:15px;accent-color:var(--blue);cursor:pointer;">
+                  <span>No approval required — mark as directly completed</span>
+                </label>
               </div>
             </div>
           </div>

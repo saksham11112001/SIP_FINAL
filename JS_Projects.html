@@ -266,11 +266,50 @@ function renderProjectsByClient(projects, tasks) {
     byClient[c].push(projects[i]);
   }
 
+  // ── Snapshot open/closed state before re-render ─────────────────────────
+  // Project task sections (collapsible) open when user has expanded them
+  var openSections = {};
+  document.querySelectorAll('.collapsible.open').forEach(function(el) {
+    openSections[el.id] = true;  // e.g. "tasks-PROJ_123"
+  });
+  // Client groups: record which ones are manually collapsed
+  var closedClients = {};
+  document.querySelectorAll('.client-group-body').forEach(function(body) {
+    if (body.style.display === 'none') {
+      var hdr = body.previousElementSibling;
+      if (hdr) closedClients[hdr.getAttribute('data-client')] = true;
+    }
+  });
+
   var html = [];
   for (var ci = 0; ci < order.length; ci++) {
     html.push(renderClientGroup(order[ci], byClient[order[ci]], filteredTasks, isAdmin));
   }
   container.innerHTML = html.join('');
+
+  // ── Restore open/closed state after re-render ────────────────────────────
+  Object.keys(openSections).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add('open');
+    // Rotate the chevron arrow on the project header
+    var projGroup = el.closest ? el.closest('.proj-group') : el.parentNode;
+    if (projGroup) {
+      var arrow = projGroup.querySelector('.proj-group-header .fa-chevron-right');
+      if (arrow) arrow.style.transform = 'rotate(90deg)';
+    }
+  });
+  // Restore manually collapsed client groups
+  Object.keys(closedClients).forEach(function(clientKey) {
+    document.querySelectorAll('.client-group-body').forEach(function(body) {
+      var hdr = body.previousElementSibling;
+      if (hdr && hdr.getAttribute('data-client') === clientKey) {
+        body.style.display = 'none';
+        var arrow = hdr.querySelector('.fa-chevron-down,.fa-chevron-right');
+        if (arrow) arrow.className = 'fas fa-chevron-right';
+      }
+    });
+  });
 }
 
 function renderClientGroup(client, projects, tasks, isAdmin) {
@@ -284,7 +323,7 @@ function renderClientGroup(client, projects, tasks, isAdmin) {
 
   var parts = [
     '<div class="client-group">',
-    '<div class="client-group-header" onclick="toggleClientGroup(this)">',
+    '<div class="client-group-header" data-client="' + escape(client) + '" onclick="toggleClientGroup(this)">',
     '<div class="client-header-left">',
     '<i class="fas fa-chevron-down" style="font-size:12px;transition:transform .2s"></i>',
     '<span class="client-header-title"><i class="fas fa-briefcase" style="font-size:13px;opacity:.7;margin-right:4px"></i>' + escape(client) + '</span>',

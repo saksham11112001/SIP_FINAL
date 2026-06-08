@@ -22,6 +22,76 @@ var _bgLoadGen        = 0;      // generation counter — incremented on every l
 // PERT share state — temporarily disabled
 // var _pertProjectId_   = null;
 
+// ─── REORDER MODE ────────────────────────────────────────────────────────────
+var _reorderMode = false;
+
+function toggleReorderMode() {
+  _reorderMode = !_reorderMode;
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function moveProjectUp(escapedId) {
+  var idx = -1;
+  for (var i = 0; i < allProjects.length; i++) {
+    if (escape(allProjects[i].id) === escapedId) { idx = i; break; }
+  }
+  if (idx <= 0) return;
+  var client = allProjects[idx].client || '';
+  var prevIdx = -1;
+  for (var j = idx - 1; j >= 0; j--) {
+    if ((allProjects[j].client || '') === client) { prevIdx = j; break; }
+  }
+  if (prevIdx === -1) return;
+  var tmp = allProjects[prevIdx]; allProjects[prevIdx] = allProjects[idx]; allProjects[idx] = tmp;
+  _savePersonalProjectOrder_();
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function moveProjectDown(escapedId) {
+  var idx = -1;
+  for (var i = 0; i < allProjects.length; i++) {
+    if (escape(allProjects[i].id) === escapedId) { idx = i; break; }
+  }
+  if (idx === -1) return;
+  var client = allProjects[idx].client || '';
+  var nextIdx = -1;
+  for (var j = idx + 1; j < allProjects.length; j++) {
+    if ((allProjects[j].client || '') === client) { nextIdx = j; break; }
+  }
+  if (nextIdx === -1) return;
+  var tmp = allProjects[nextIdx]; allProjects[nextIdx] = allProjects[idx]; allProjects[idx] = tmp;
+  _savePersonalProjectOrder_();
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function moveClientUp(escapedName) {
+  var name = unescape(escapedName);
+  var idx = _currentClientOrder.indexOf(name);
+  if (idx <= 0) return;
+  var tmp = _currentClientOrder[idx - 1]; _currentClientOrder[idx - 1] = _currentClientOrder[idx]; _currentClientOrder[idx] = tmp;
+  _savePersonalClientOrder_(_currentClientOrder);
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function moveClientDown(escapedName) {
+  var name = unescape(escapedName);
+  var idx = _currentClientOrder.indexOf(name);
+  if (idx === -1 || idx >= _currentClientOrder.length - 1) return;
+  var tmp = _currentClientOrder[idx + 1]; _currentClientOrder[idx + 1] = _currentClientOrder[idx]; _currentClientOrder[idx] = tmp;
+  _savePersonalClientOrder_(_currentClientOrder);
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+// ─── DRAG-AND-DROP STATE ─────────────────────────────────────────────────────
+// Project drag
+var _projDragId        = null;
+var _projDragFromHandle = false;   // flag: true only when grip was mousedown'd
+var _isDraggingProject  = false;   // prevents client-group dragover firing during project drag
+// Client group drag
+var _clientDragIdx      = -1;
+var _clientDragFromHandle = false;
+var _currentClientOrder = [];      // mirrors rendered client order, updated on each render
+
 // ─── TASK VIEW FILTER (All Tasks / My Tasks) ─────────────────────────────────
 
 var _taskViewFilter = 'my';  // 'all' | 'my'
@@ -139,7 +209,7 @@ function loadProjectsPage() {
     runServer('getClients'),
     runServer('getTeams')
   ]).then(function(results) {
-    allProjects  = results[0] || [];
+    allProjects  = _applyPersonalProjectOrder_(results[0] || []);
     allTasks     = results[1] || [];
     _taskTotal   = allTasks.length;
     _taskHasMore = false;
@@ -227,6 +297,19 @@ function renderProjectsByClient(projects, tasks) {
   var isTeamLeader = currentUser.role === 'Team Leader';
   document.getElementById('btnAddProject').style.display = (isAdmin || isTeamLeader) ? '' : 'none';
 
+  // Show Reorder button only to Admins; update label & style to reflect current mode
+  var btnReorder = document.getElementById('btnReorderProjects');
+  if (btnReorder) {
+    btnReorder.style.display = isAdmin ? '' : 'none';
+    if (_reorderMode) {
+      btnReorder.innerHTML = '<i class="fas fa-check"></i> Done Reordering';
+      btnReorder.className = 'btn btn-primary';
+    } else {
+      btnReorder.innerHTML = '<i class="fas fa-list-ol"></i> Reorder';
+      btnReorder.className = 'btn btn-outline';
+    }
+  }
+
   if (!projects || projects.length === 0) {
     container.innerHTML = emptyState('fa-folder-open','No projects found','Add a project to get started');
     return;
@@ -265,6 +348,9 @@ function renderProjectsByClient(projects, tasks) {
     if (!byClient[c]) { byClient[c] = []; order.push(c); }
     byClient[c].push(projects[i]);
   }
+  // Apply personal client-group order from localStorage
+  order = _applyPersonalClientOrder_(order);
+  _currentClientOrder = order.slice(); // keep in sync for drag-drop
 
   // ── Snapshot open/closed state before re-render ─────────────────────────
   // Project task sections (collapsible) open when user has expanded them
@@ -283,7 +369,7 @@ function renderProjectsByClient(projects, tasks) {
 
   var html = [];
   for (var ci = 0; ci < order.length; ci++) {
-    html.push(renderClientGroup(order[ci], byClient[order[ci]], filteredTasks, isAdmin));
+    html.push(renderClientGroup(order[ci], byClient[order[ci]], filteredTasks, isAdmin, ci));
   }
   container.innerHTML = html.join('');
 
@@ -312,7 +398,7 @@ function renderProjectsByClient(projects, tasks) {
   });
 }
 
-function renderClientGroup(client, projects, tasks, isAdmin) {
+function renderClientGroup(client, projects, tasks, isAdmin, clientIdx) {
   var totalTasks = 0;
   for (var i = 0; i < projects.length; i++) {
     var pid = projects[i].id;
@@ -321,17 +407,30 @@ function renderClientGroup(client, projects, tasks, isAdmin) {
     }
   }
 
+  var ci = clientIdx !== undefined ? clientIdx : 0;
+  var clientDragAttrs = ' draggable="true"' +
+    ' ondragstart="clientDragStart(event,' + ci + ')"' +
+    ' ondragover="clientDragOver(event,this)"' +
+    ' ondragleave="clientDragLeave(event,this)"' +
+    ' ondrop="clientDrop(event,this,' + ci + ')"' +
+    ' ondragend="clientDragEnd()"';
+
+  var escapedClient = escape(client);
   var parts = [
-    '<div class="client-group">',
-    '<div class="client-group-header" data-client="' + escape(client) + '" onclick="toggleClientGroup(this)">',
+    '<div class="client-group"' + clientDragAttrs + '>',
+    '<div class="client-group-header" data-client="' + escapedClient + '" onclick="toggleClientGroup(this)">',
     '<div class="client-header-left">',
+    '<span class="client-drag-handle" title="Drag to reorder clients" onclick="event.stopPropagation()" onmousedown="_clientDragFromHandle=true" onmouseup="_clientDragFromHandle=false"><i class="fas fa-grip-vertical"></i></span>',
+    // Arrow buttons — visible only in reorder mode
+    _reorderMode ? '<button class="act-btn" style="padding:3px 8px;margin-right:2px" title="Move client up" onclick="moveClientUp(\'' + escapedClient + '\');event.stopPropagation()"><i class="fas fa-chevron-up"></i></button>' : '',
+    _reorderMode ? '<button class="act-btn" style="padding:3px 8px;margin-right:4px" title="Move client down" onclick="moveClientDown(\'' + escapedClient + '\');event.stopPropagation()"><i class="fas fa-chevron-down"></i></button>' : '',
     '<i class="fas fa-chevron-down" style="font-size:12px;transition:transform .2s"></i>',
     '<span class="client-header-title"><i class="fas fa-briefcase" style="font-size:13px;opacity:.7;margin-right:4px"></i>' + escape(client) + '</span>',
     '<span class="client-count-pill">' + projects.length + ' project' + (projects.length>1?'s':'') + '</span>',
     '<span class="client-count-pill" style="background:rgba(255,255,255,.1)">' + totalTasks + ' task' + (totalTasks!==1?'s':'') + '</span>',
     '</div><i class="fas fa-ellipsis-vertical" style="opacity:.5"></i>',
     '</div>',
-    '<div class="client-group-body">'
+    '<div class="client-group-body" ondragover="clientBodyDragOver(event,this)" ondrop="clientBodyDrop(event,this)">'
   ];
 
   for (var i = 0; i < projects.length; i++) {
@@ -450,12 +549,21 @@ function renderProjectGroup(p, tasks, isAdmin) {
   var pid         = escape(p.id);
   var canHold     = isAdmin || isProjLead;  // Admin or this project's lead
 
+  var dragAttrs = isAdmin
+    ? ' draggable="true"' +
+      ' ondragstart="projDragStart(event,\'' + pid + '\')"' +
+      ' ondragover="projDragOver(event,this)"' +
+      ' ondragleave="projDragLeave(event,this)"' +
+      ' ondragend="projDragEnd()"'
+    : ''; // ondrop removed — handled by client-group-body for Y-position accuracy
+
   var parts = [
-    '<div class="proj-group' + (onHold ? ' proj-on-hold' : '') + '" id="proj-' + pid + '">',
+    '<div class="proj-group' + (onHold ? ' proj-on-hold' : '') + '" id="proj-' + pid + '"' + dragAttrs + '>',
 
     // Header
     '<div class="proj-group-header" onclick="toggleProjGroup(this)">',
     '<div class="proj-header-left">',
+    isAdmin ? '<span class="proj-drag-handle" title="Drag to reorder" onclick="event.stopPropagation()" onmousedown="_projDragFromHandle=true" onmouseup="_projDragFromHandle=false"><i class="fas fa-grip-vertical"></i></span>' : '',
     '<i class="fas fa-chevron-right" style="font-size:11px;color:var(--text-4);transition:transform .2s;flex-shrink:0"></i>',
     '<span class="proj-header-title">' + escape(p.name) + '</span>',
     '<span class="task-pill">' + total + ' task' + (total!==1?'s':'') + '</span>',
@@ -464,6 +572,9 @@ function renderProjectGroup(p, tasks, isAdmin) {
     overdue && !onHold ? '<span class="badge badge-overdue" style="font-size:10px"><i class="fas fa-triangle-exclamation"></i> Overdue</span>' : '',
     '</div>',
     '<div class="proj-header-right">',
+    // Up/Down arrow reorder buttons — visible only in reorder mode (Admin only)
+    (_reorderMode && isAdmin) ? '<button class="act-btn" style="padding:3px 8px" title="Move project up" onclick="moveProjectUp(\'' + pid + '\');event.stopPropagation()"><i class="fas fa-chevron-up"></i></button>' : '',
+    (_reorderMode && isAdmin) ? '<button class="act-btn" style="padding:3px 8px" title="Move project down" onclick="moveProjectDown(\'' + pid + '\');event.stopPropagation()"><i class="fas fa-chevron-down"></i></button>' : '',
     statusBadge(p.status),
     // Hold / Restart toggle — Manager and Team Leader
     canHold ? '<button class="act-btn ' + (onHold ? 'act-btn-approve' : 'act-btn-hold') + '" onclick="toggleProjectHold(\'' + pid + '\',\'' + escape(p.name).replace(/'/g,"\\'") + '\',\'' + escape(p.status) + '\');event.stopPropagation()" title="' + (onHold ? 'Restart project' : 'Put on hold') + '"><i class="fas ' + (onHold ? 'fa-play' : 'fa-pause') + '"></i></button>' : '',
@@ -692,6 +803,239 @@ function toggleProjGroup(header) {
   var isOpen   = collapse.classList.contains('open');
   collapse.classList.toggle('open');
   if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(90deg)';
+}
+
+// ─── PERSONAL PROJECT ORDER (localStorage, keyed by user email) ──────────────
+
+function _savePersonalProjectOrder_() {
+  if (!currentUser || !currentUser.email) return;
+  var ids = [];
+  for (var i = 0; i < allProjects.length; i++) ids.push(allProjects[i].id);
+  try { localStorage.setItem('si_proj_order_' + currentUser.email, JSON.stringify(ids)); } catch(e) {}
+}
+
+function _applyPersonalProjectOrder_(projects) {
+  if (!currentUser || !currentUser.email) return projects;
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem('si_proj_order_' + currentUser.email)); } catch(e) {}
+  if (!saved || !Array.isArray(saved) || !saved.length) return projects;
+  var idxMap = {};
+  for (var i = 0; i < saved.length; i++) idxMap[saved[i]] = i;
+  return projects.slice().sort(function(a, b) {
+    var ai = idxMap[a.id] !== undefined ? idxMap[a.id] : 999999;
+    var bi = idxMap[b.id] !== undefined ? idxMap[b.id] : 999999;
+    return ai - bi;
+  });
+}
+
+// ─── PERSONAL CLIENT ORDER (localStorage, keyed by user email) ───────────────
+
+function _savePersonalClientOrder_(order) {
+  if (!currentUser || !currentUser.email) return;
+  try { localStorage.setItem('si_client_order_' + currentUser.email, JSON.stringify(order)); } catch(e) {}
+}
+
+function _applyPersonalClientOrder_(order) {
+  if (!currentUser || !currentUser.email) return order;
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem('si_client_order_' + currentUser.email)); } catch(e) {}
+  if (!saved || !Array.isArray(saved) || !saved.length) return order;
+  var idxMap = {};
+  for (var i = 0; i < saved.length; i++) idxMap[saved[i]] = i;
+  return order.slice().sort(function(a, b) {
+    var ai = idxMap[a] !== undefined ? idxMap[a] : 999999;
+    var bi = idxMap[b] !== undefined ? idxMap[b] : 999999;
+    return ai - bi;
+  });
+}
+
+// ─── PROJECT DRAG-AND-DROP ───────────────────────────────────────────────────
+
+function projDragStart(e, projId) {
+  // Only drag when the grip handle was pressed (_projDragFromHandle set by onmousedown)
+  if (!_projDragFromHandle) { e.preventDefault(); return; }
+  _projDragFromHandle = false;
+  _isDraggingProject  = true;
+  _projDragId = projId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', projId);
+  setTimeout(function() {
+    var el = document.getElementById('proj-' + projId);
+    if (el) el.classList.add('proj-dragging');
+  }, 0);
+}
+
+function projDragOver(e, el) {
+  if (!_projDragId) return;
+  e.preventDefault();
+  e.stopPropagation(); // prevent client-group dragover from firing
+  e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.proj-group.proj-drag-over').forEach(function(g) {
+    if (g !== el) g.classList.remove('proj-drag-over');
+  });
+  el.classList.add('proj-drag-over');
+}
+
+function projDragLeave(e, el) {
+  // Ignore leave events that are just moving into a child element
+  if (el && el.contains && el.contains(e.relatedTarget)) return;
+  if (el) el.classList.remove('proj-drag-over');
+}
+
+// ─── CONTAINER-LEVEL PROJECT DROP (on client-group-body, Y-position based) ──
+// Handles drops anywhere in the client group — on a project OR in the gaps.
+// This avoids the "dropped on source element" problem and works between projects.
+
+function clientBodyDragOver(e, bodyEl) {
+  if (!_projDragId) return;      // only handle project drags here
+  e.preventDefault();
+  e.stopPropagation();           // keep client-group from seeing this as a client drag
+  e.dataTransfer.dropEffect = 'move';
+  // Highlight the proj-group nearest the cursor
+  var groups = bodyEl.querySelectorAll('.proj-group');
+  var nearest = null;
+  for (var i = 0; i < groups.length; i++) {
+    var r = groups[i].getBoundingClientRect();
+    if (e.clientY >= r.top && e.clientY < r.bottom) { nearest = groups[i]; break; }
+  }
+  bodyEl.querySelectorAll('.proj-group.proj-drag-over').forEach(function(g) { g.classList.remove('proj-drag-over'); });
+  if (nearest && nearest.id !== 'proj-' + _projDragId) nearest.classList.add('proj-drag-over');
+}
+
+function clientBodyDrop(e, bodyEl) {
+  if (!_projDragId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  bodyEl.querySelectorAll('.proj-group.proj-drag-over').forEach(function(g) { g.classList.remove('proj-drag-over'); });
+
+  var srcEscId = _projDragId;
+
+  // Find source project in allProjects (IDs stored without escaping)
+  var srcProj = null, srcIdx = -1;
+  for (var i = 0; i < allProjects.length; i++) {
+    if (escape(allProjects[i].id) === srcEscId) { srcProj = allProjects[i]; srcIdx = i; break; }
+  }
+  if (!srcProj) return;
+
+  // Determine the client name of this body
+  var cGroup  = bodyEl.parentNode;
+  var cHdr    = cGroup ? cGroup.querySelector('[data-client]') : null;
+  var cName   = cHdr   ? unescape(cHdr.getAttribute('data-client') || '') : '';
+
+  if ((srcProj.client || '') !== cName) {
+    toast('Projects can only be reordered within the same client group.', 'warning');
+    projDragEnd();
+    return;
+  }
+
+  // Find insertion index using Y-position (insert BEFORE the project whose midpoint is below cursor)
+  // Skip the dragging element itself — its rect is still in the DOM at its original position,
+  // which causes the cursor to land "inside" it and produce a wrong insertion point.
+  var groups = bodyEl.querySelectorAll('.proj-group');
+  var insertBeforeEscId = null;
+  for (var j = 0; j < groups.length; j++) {
+    if (groups[j].id === 'proj-' + srcEscId) continue; // skip dragging element
+    var r = groups[j].getBoundingClientRect();
+    if (e.clientY < r.top + r.height / 2) {
+      insertBeforeEscId = groups[j].id.slice(5); // strip "proj-" prefix
+      break;
+    }
+  }
+
+  // Remove src from allProjects
+  allProjects.splice(srcIdx, 1);
+
+  // Find insertion point in the updated array
+  var insertIdx = -1;
+  if (insertBeforeEscId !== null && insertBeforeEscId !== srcEscId) {
+    for (var k = 0; k < allProjects.length; k++) {
+      if (escape(allProjects[k].id) === insertBeforeEscId) { insertIdx = k; break; }
+    }
+  }
+
+  if (insertIdx === -1) {
+    // Append after last project of this client
+    var lastClientIdx = allProjects.length - 1;
+    for (var m = allProjects.length - 1; m >= 0; m--) {
+      if ((allProjects[m].client || '') === cName) { lastClientIdx = m; break; }
+    }
+    allProjects.splice(lastClientIdx + 1, 0, srcProj);
+  } else {
+    allProjects.splice(insertIdx, 0, srcProj);
+  }
+
+  renderProjectsByClient(allProjects, allTasks);
+  _savePersonalProjectOrder_();
+}
+
+function projDragEnd() {
+  _projDragId        = null;
+  _isDraggingProject = false;
+  document.querySelectorAll('.proj-group').forEach(function(el) {
+    el.classList.remove('proj-dragging', 'proj-drag-over');
+  });
+}
+
+// ─── CLIENT GROUP DRAG-AND-DROP ──────────────────────────────────────────────
+
+function clientDragStart(e, idx) {
+  if (!_clientDragFromHandle) { e.preventDefault(); return; }
+  _clientDragFromHandle = false;
+  _clientDragIdx = idx;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(idx));
+  setTimeout(function() {
+    var groups = document.querySelectorAll('.client-group');
+    if (groups[idx]) groups[idx].classList.add('client-dragging');
+  }, 0);
+}
+
+function clientDragOver(e, el) {
+  if (_isDraggingProject || _clientDragIdx === -1) return; // ignore when dragging a project
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.client-group.client-drag-over').forEach(function(g) {
+    if (g !== el) g.classList.remove('client-drag-over');
+  });
+  el.classList.add('client-drag-over');
+}
+
+function clientDragLeave(e, el) {
+  if (el && el.contains && el.contains(e.relatedTarget)) return;
+  if (el) el.classList.remove('client-drag-over');
+}
+
+function clientDrop(e, el, tgtIdx) {
+  e.preventDefault();
+  if (el) el.classList.remove('client-drag-over');
+
+  var srcIdx = _clientDragIdx;
+  if (srcIdx === -1 || srcIdx === tgtIdx) return;
+
+  // Reorder _currentClientOrder
+  var newOrder = _currentClientOrder.slice();
+  var src = newOrder.splice(srcIdx, 1)[0];
+  // tgtIdx is the render-time index of the drop target. After removing srcIdx the
+  // target element's position in newOrder is already correct: if src was before target
+  // the target shifted down by one (so tgtIdx-1 in newOrder), but we want to insert
+  // AFTER the target (swap semantics), which is tgtIdx in the original render order.
+  // Simplest correct formula: adjTgt = tgtIdx (no offset needed for either direction).
+  var adjTgt = tgtIdx;
+  newOrder.splice(adjTgt, 0, src);
+  _currentClientOrder = newOrder;
+
+  // Save personal client order
+  _savePersonalClientOrder_(_currentClientOrder);
+
+  // Re-render
+  renderProjectsByClient(allProjects, allTasks);
+}
+
+function clientDragEnd() {
+  _clientDragIdx = -1;
+  document.querySelectorAll('.client-group').forEach(function(el) {
+    el.classList.remove('client-dragging', 'client-drag-over');
+  });
 }
 
 function expandAllGroups() {

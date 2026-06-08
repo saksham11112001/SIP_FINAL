@@ -613,6 +613,16 @@ body {
   transition:background var(--trans);
 }
 .proj-group-header:hover { background:#f0f6ff; }
+.proj-drag-handle { cursor:grab; padding:0 6px 0 2px; color:var(--text-4); font-size:11px; flex-shrink:0; display:inline-flex; align-items:center; }
+.proj-drag-handle:hover { color:var(--text-2); }
+.proj-drag-handle:active { cursor:grabbing; }
+.proj-group.proj-dragging { opacity:.4; border:2px dashed var(--border) !important; }
+.proj-group.proj-drag-over { border-top:3px solid var(--blue) !important; }
+.client-drag-handle { cursor:grab; padding:0 8px 0 0; color:rgba(255,255,255,.45); font-size:11px; flex-shrink:0; display:inline-flex; align-items:center; }
+.client-drag-handle:hover { color:rgba(255,255,255,.9); }
+.client-drag-handle:active { cursor:grabbing; }
+.client-group.client-dragging { opacity:.4; border:2px dashed rgba(255,255,255,.3) !important; }
+.client-group.client-drag-over { border-top:3px solid #60a5fa !important; }
 .proj-header-left { display:flex; align-items:center; gap:10px; min-width:0; }
 .proj-header-title { font-size:14px; font-weight:700; color:var(--text-1); }
 .task-pill {

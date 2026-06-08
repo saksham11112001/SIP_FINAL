@@ -562,6 +562,59 @@ function recomputeProjectStatus(projectId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  REORDER PROJECTS
+//  Receives the full ordered list of project IDs and rewrites the sheet rows
+//  in that order.  Any project not in the list is appended at the end.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function setProjectOrder(orderedProjectIds) {
+  try {
+    var user = getCurrentUser();
+    if (user.role !== 'Admin') {
+      return { success: false, error: 'Only an Admin can reorder projects.' };
+    }
+    if (!orderedProjectIds || orderedProjectIds.length === 0) {
+      return { success: false, error: 'No project IDs provided.' };
+    }
+
+    clearCache([CACHE_KEYS.PROJECTS]);
+    var sheet   = getSheet(SHEET_NAMES.PROJECTS);
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    if (lastRow < 2) return { success: true };
+
+    // Read raw values (not display values — avoids date string issues)
+    var rows = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+    // Build id → row map
+    var rowMap = {};
+    rows.forEach(function(row) {
+      var id = String(row[PROJ_COL.ID] || '').trim();
+      if (id) rowMap[id] = row;
+    });
+
+    // New order: requested IDs first, then any remaining
+    var newRows = [];
+    orderedProjectIds.forEach(function(id) {
+      if (rowMap[id]) { newRows.push(rowMap[id]); delete rowMap[id]; }
+    });
+    Object.keys(rowMap).forEach(function(id) { newRows.push(rowMap[id]); });
+
+    if (newRows.length > 0) {
+      sheet.getRange(2, 1, newRows.length, lastCol).setValues(newRows);
+    }
+
+    clearCache([CACHE_KEYS.PROJECTS]);
+    logAudit(user.name, 'REORDER_PROJECTS', 'Project', 'BULK',
+      orderedProjectIds.length + ' projects reordered');
+    return { success: true };
+  } catch (e) {
+    Logger.log('setProjectOrder error: ' + e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  DELETE PROJECT
 // ─────────────────────────────────────────────────────────────────────────────
 

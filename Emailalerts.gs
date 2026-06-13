@@ -65,8 +65,14 @@ function setupAllEmailTriggers() {
     .atHour(7)
     .create();
 
+  // Watchdog: runs every 6 hours and alerts admins if the daily trigger has gone silent
+  ScriptApp.newTrigger("checkEmailTriggerHealth")
+    .timeBased()
+    .everyHours(6)
+    .create();
+
   Logger.log(
-    "✅ Triggers created: sendDailyReminders (9am daily), sendWeeklySummary (Mon 7am)",
+    "✅ Triggers created: sendDailyReminders (9am daily), sendWeeklySummary (Mon 7am), checkEmailTriggerHealth (every 6h)",
   );
   return { success: true, message: "Email triggers configured successfully." };
 }
@@ -77,21 +83,165 @@ function removeAllEmailTriggers() {
 }
 
 function getEmailTriggerStatus() {
-  var fns = ["sendDailyReminders", "sendWeeklySummary"];
+  var fns = ["sendDailyReminders", "sendWeeklySummary", "checkEmailTriggerHealth"];
   var active = {};
-  fns.forEach(function (fn) {
-    active[fn] = false;
-  });
+  fns.forEach(function (fn) { active[fn] = false; });
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (active.hasOwnProperty(t.getHandlerFunction()))
       active[t.getHandlerFunction()] = true;
   });
   return {
     triggers: active,
-    allActive: fns.every(function (fn) {
-      return active[fn];
-    }),
+    allActive: fns.every(function (fn) { return active[fn]; }),
   };
+}
+
+// =============================================================================
+//  WATCHDOG — checkEmailTriggerHealth()
+//
+//  Runs every 6 hours (registered by setupAllEmailTriggers).
+//  Reads the AuditLog directly (no cache) to find the most recent
+//  DAILY_REMINDERS entry. If none exists in the last 26 hours AND it is
+//  already past 10:00 AM (meaning the 9 AM trigger should have fired),
+//  sends an alert email to all Admins.
+//
+//  This catches:
+//    • OAuth token expiration      (trigger fails before any code runs)
+//    • Silent runtime crashes      (trigger ran but threw an unhandled error)
+//    • Trigger accidentally deleted
+//    • Any other silent failure
+//
+//  NOTE: Because the watchdog and the main triggers share the same OAuth
+//  token, if OAuth fully expires the watchdog will also fail — at that
+//  point Google itself sends an authorization-failure email to the script
+//  owner. Enable that in Apps Script → Project Settings → Notifications.
+// =============================================================================
+
+function checkEmailTriggerHealth() {
+  try {
+    var now = new Date();
+    var hour = now.getHours(); // script timezone
+
+    // Only check after 10 AM — the 9 AM trigger should have run by then.
+    if (hour < 10) return;
+
+    // Read AuditLog directly (no cache — must be raw for reliability).
+    var ss     = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var audit  = ss.getSheetByName(SHEET_NAMES.AUDIT);
+    if (!audit) return;
+
+    var rows = audit.getDataRange().getValues();
+    var cutoff = new Date(now.getTime() - 26 * 60 * 60 * 1000); // 26 hours ago
+
+    // Search backwards for the most recent DAILY_REMINDERS entry.
+    var lastRun = null;
+    for (var i = rows.length - 1; i >= 1; i--) {
+      // AuditLog columns: Timestamp | User | Action | Entity | ID | Notes
+      // logAudit() action is "DAILY_REMINDERS"
+      if (String(rows[i][2] || '').trim() === 'DAILY_REMINDERS') {
+        var ts = rows[i][0];
+        lastRun = ts instanceof Date ? ts : new Date(ts);
+        break;
+      }
+    }
+
+    if (!lastRun || lastRun < cutoff) {
+      var missedHours = lastRun
+        ? Math.round((now - lastRun) / 3600000)
+        : null;
+      _sendAdminErrorAlert_(
+        "sendDailyReminders (MISSED RUN)",
+        lastRun
+          ? "The daily email trigger has not run in " + missedHours + " hours. Last run: " + lastRun.toLocaleString() + ". This usually means the OAuth token has expired or the trigger was deleted."
+          : "No DAILY_REMINDERS entry found in the AuditLog at all. The trigger may never have run or the log may have been cleared."
+      );
+    }
+  } catch (e) {
+    Logger.log("checkEmailTriggerHealth error: " + e.message);
+    // Do not recurse into _sendAdminErrorAlert_ here — avoid alert loops.
+  }
+}
+
+// =============================================================================
+//  ADMIN ERROR ALERT
+//
+//  Reads the Teams sheet RAW (no cache, no helper functions) so it works
+//  even when the cache layer, getCurrentUser(), or other utilities are broken.
+//  Sends a styled HTML email to every Admin on the team.
+// =============================================================================
+
+// Alert emails go to this address only — change here if needed.
+var ALERT_RECIPIENT = 'saksham.gpt2001@gmail.com';
+
+function _sendAdminErrorAlert_(fnName, errMsg) {
+  try {
+    var now     = new Date();
+    var timeStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd MMM yyyy, hh:mm a");
+    var subject = '🚨 SI Tracker Alert: Automated trigger failed — ' + fnName;
+
+    var body =
+      '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>' +
+      '<body style="margin:0;padding:0;background:#f1f5f9;font-family:Helvetica Neue,Arial,sans-serif;">' +
+      '<div style="max-width:620px;margin:24px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08);">' +
+
+      // Header
+      '<div style="background:linear-gradient(135deg,#7f1d1d 0%,#dc2626 100%);padding:24px 28px 20px;">' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">' +
+      '<img src="cid:siLogo" alt="SI" style="width:40px;height:40px;border-radius:10px;">' +
+      '<div>' +
+      '<div style="color:rgba(255,255,255,.65);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-weight:700;">Secret Ingredient</div>' +
+      '<div style="color:#fff;font-size:14px;font-weight:700;">Project Tracker — System Alert</div>' +
+      '</div></div>' +
+      '<h1 style="color:#fff;font-size:17px;font-weight:700;margin:0 0 4px;">🚨 Automated Trigger Failed</h1>' +
+      '<p style="color:rgba(255,255,255,.75);font-size:12px;margin:0;">Detected at ' + timeStr + '</p>' +
+      '</div>' +
+
+      // Body
+      '<div style="padding:24px 28px;">' +
+
+      // Alert box
+      '<div style="background:#fef2f2;border-left:4px solid #dc2626;border-radius:0 8px 8px 0;padding:14px 18px;margin-bottom:20px;">' +
+      '<p style="margin:0 0 6px;font-size:13px;font-weight:700;color:#991b1b;">Function: <code style="background:#fee2e2;padding:2px 7px;border-radius:4px;font-size:12px;">' + fnName + '</code></p>' +
+      '<p style="margin:0;font-size:13px;color:#7f1d1d;line-height:1.6;">' + (errMsg || 'An unknown error occurred.') + '</p>' +
+      '</div>' +
+
+      // Fix steps
+      '<h3 style="font-size:13px;font-weight:700;color:#1a202c;margin:0 0 10px;">How to fix this</h3>' +
+      '<ol style="margin:0 0 20px;padding-left:20px;font-size:13px;color:#374151;line-height:1.9;">' +
+      '<li>Open the <strong>Apps Script editor</strong> for the SI Tracker project.</li>' +
+      '<li>Select the function <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">getEmailTriggerStatus</code> from the dropdown and click <strong>Run</strong>.</li>' +
+      '<li>If Google shows an <strong>authorization / permissions</strong> dialog — click <strong>Allow</strong>. This refreshes the OAuth token.</li>' +
+      '<li>Then select <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">setupAllEmailTriggers</code> and click <strong>Run</strong> to re-register the triggers.</li>' +
+      '<li>Check the <strong>Triggers panel</strong> (clock icon) and confirm both triggers appear with a recent "Last run" time.</li>' +
+      '</ol>' +
+
+      // Why box
+      '<div style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;padding:14px 18px;">' +
+      '<p style="margin:0;font-size:12px;color:#78350f;line-height:1.65;">' +
+      '<strong>Why does this happen?</strong> Google periodically revokes Apps Script OAuth tokens, especially after a script update or redeployment. ' +
+      'Time-based triggers fail silently when this occurs. Re-running <code>setupAllEmailTriggers</code> creates fresh triggers with a valid token.' +
+      '</p></div>' +
+      '</div>' + // end body padding
+
+      // Footer
+      '<div style="background:#f7fafc;padding:14px 28px;border-top:1px solid #e2e8f0;">' +
+      '<p style="margin:0;font-size:11px;color:#9ca3af;text-align:center;">' +
+      'Automated alert from Secret Ingredient Project Tracker &mdash; do not reply.' +
+      '</p></div>' +
+      '</div></body></html>';
+
+    MailApp.sendEmail({
+      to: ALERT_RECIPIENT,
+      subject: subject,
+      htmlBody: body,
+      inlineImages: { siLogo: _getLogoBlob_() },
+    });
+
+    Logger.log('Admin error alert sent to: ' + ALERT_RECIPIENT);
+  } catch (e) {
+    // If even the alert email fails, log it — nothing more we can do from here.
+    Logger.log('_sendAdminErrorAlert_ itself failed: ' + e.message);
+  }
 }
 
 function _clearEmailTriggers_() {
@@ -99,6 +249,7 @@ function _clearEmailTriggers_() {
   var known = [
     "sendDailyReminders",
     "sendWeeklySummary",
+    "checkEmailTriggerHealth",
     "sendMorningDigest",
     "sendOverdueAlert", // legacy — safe to clear
     "sendBulkPendingTasksEmail",
@@ -495,6 +646,7 @@ function sendDailyReminders() {
     );
   } catch (e) {
     Logger.log("sendDailyReminders CRITICAL: " + e.message);
+    _sendAdminErrorAlert_("sendDailyReminders", e.message);
   }
 }
 
@@ -534,6 +686,7 @@ function sendWeeklySummary() {
     );
   } catch (e) {
     Logger.log("sendWeeklySummary CRITICAL: " + e.message);
+    _sendAdminErrorAlert_("sendWeeklySummary", e.message);
   }
 }
 
